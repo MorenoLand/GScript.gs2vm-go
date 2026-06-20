@@ -82,8 +82,9 @@ func TestRunCapturesPlayerClientFlags(t *testing.T) {
 		Player:      map[string]string{"account": "moondeath"},
 		PlayerFlags: map[string]string{"client.old": "1"},
 		Script: `function onCreated() {
-			player.client.foo = "bar";
-			player.clientr.secret = "ok";
+			client.foo = "bar";
+			clientr.secret = "ok";
+			player.client.extra = "yes";
 		}`,
 	})
 
@@ -95,6 +96,9 @@ func TestRunCapturesPlayerClientFlags(t *testing.T) {
 	}
 	if !hasPlayerFlag(result.PlayerFlags, "moondeath", "clientr.secret", "ok") {
 		t.Fatalf("missing clientr flag: %#v", result.PlayerFlags)
+	}
+	if !hasPlayerFlag(result.PlayerFlags, "moondeath", "client.extra", "yes") {
+		t.Fatalf("missing player.client alias flag: %#v", result.PlayerFlags)
 	}
 }
 
