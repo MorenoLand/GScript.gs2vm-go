@@ -16,6 +16,7 @@ type Config struct {
 	Player        map[string]string
 	PlayerFlags   map[string]string
 	Players       []PlayerContext
+	This          map[string]any
 	ServerFlags   map[string]string
 	ServerOptions map[string]string
 }
@@ -25,6 +26,7 @@ type Result struct {
 	ClientTriggers []ClientTrigger
 	PlayerFlags    []PlayerFlag
 	PlayerMessages []PlayerMessage
+	This           map[string]any
 	Err            string
 }
 
@@ -62,12 +64,14 @@ type scriptPlayerObject struct {
 }
 
 var spcPattern = regexp.MustCompile(`(?i)\s+SPC\s+`)
+var tempAssignPattern = regexp.MustCompile(`\btemp\.([A-Za-z_][A-Za-z0-9_]*)\s*=`)
 
 func Run(config Config) Result {
 	vm := goja.New()
 	result := Result{}
 	src := Translate(StripClientside(config.Script))
 	players := make([]scriptPlayerObject, 0, len(config.Players)+1)
+	thisObj := objectFromAnyMap(vm, config.This)
 
 	vm.Set("name", config.ScriptName)
 	vm.Set("params", append([]string(nil), config.Params...))
@@ -117,10 +121,11 @@ func Run(config Config) Result {
 	if !ok {
 		return result
 	}
-	if _, err := fn(goja.Undefined()); err != nil {
+	if _, err := fn(thisObj); err != nil {
 		result.Err = err.Error()
 	}
 	collectPlayerFlags(vm, &result, players)
+	result.This = exportObject(thisObj)
 	return result
 }
 
@@ -135,7 +140,32 @@ func StripClientside(script string) string {
 }
 
 func Translate(script string) string {
-	return spcPattern.ReplaceAllString(script, ` + " " + `)
+	script = spcPattern.ReplaceAllString(script, ` + " " + `)
+	return aliasTempAssignments(script)
+}
+
+func aliasTempAssignments(script string) string {
+	matches := tempAssignPattern.FindAllStringSubmatchIndex(script, -1)
+	if len(matches) == 0 {
+		return script
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		if match[1] < len(script) && script[match[1]] == '=' {
+			continue
+		}
+		name := script[match[2]:match[3]]
+		out.WriteString(script[last:match[0]])
+		out.WriteString("temp.")
+		out.WriteString(name)
+		out.WriteString(" = ")
+		out.WriteString(name)
+		out.WriteString(" =")
+		last = match[1]
+	}
+	out.WriteString(script[last:])
+	return out.String()
 }
 
 func findFunction(vm *goja.Runtime, eventName string) (goja.Callable, bool) {
@@ -159,6 +189,25 @@ func objectFromMap(vm *goja.Runtime, values map[string]string) *goja.Object {
 		obj.Set(key, mapValue(value))
 	}
 	return obj
+}
+
+func objectFromAnyMap(vm *goja.Runtime, values map[string]any) *goja.Object {
+	obj := vm.NewObject()
+	for key, value := range values {
+		obj.Set(key, value)
+	}
+	return obj
+}
+
+func exportObject(obj *goja.Object) map[string]any {
+	out := make(map[string]any)
+	if obj == nil {
+		return out
+	}
+	for _, key := range obj.Keys() {
+		out[key] = obj.Get(key).Export()
+	}
+	return out
 }
 
 func playerContextFromMap(values map[string]string, flags map[string]string) PlayerContext {

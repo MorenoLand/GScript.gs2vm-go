@@ -114,6 +114,9 @@ func TestRunFindPlayerSendPMAndFlags(t *testing.T) {
 				temp.pl.clientr.hp = "2";
 				temp.pl.sendpm("hey there");
 				temp.pl.sendplayer("second");
+				foo = temp.pl;
+				foo.sendpm("third");
+				findplayer("moondeath").sendpm("fourth");
 			}
 		}`,
 	})
@@ -124,8 +127,52 @@ func TestRunFindPlayerSendPMAndFlags(t *testing.T) {
 	if !hasPlayerFlag(result.PlayerFlags, "moondeath", "clientr.hp", "2") {
 		t.Fatalf("missing findplayer flag update: %#v", result.PlayerFlags)
 	}
-	if len(result.PlayerMessages) != 2 || result.PlayerMessages[0].Account != "moondeath" || result.PlayerMessages[0].Message != "hey there" || result.PlayerMessages[1].Message != "second" {
+	if len(result.PlayerMessages) != 4 || result.PlayerMessages[0].Account != "moondeath" || result.PlayerMessages[0].Message != "hey there" || result.PlayerMessages[1].Message != "second" || result.PlayerMessages[2].Message != "third" || result.PlayerMessages[3].Message != "fourth" {
 		t.Fatalf("PlayerMessages = %#v", result.PlayerMessages)
+	}
+}
+
+func TestRunTempAssignmentCreatesBareAliasForCurrentEvent(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Players:   []PlayerContext{{Account: "moondeath"}},
+		Script: `function onCreated() {
+			temp.foo = findplayer("moondeath");
+			foo.sendpm("kek");
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.PlayerMessages) != 1 || result.PlayerMessages[0].Message != "kek" {
+		t.Fatalf("PlayerMessages = %#v", result.PlayerMessages)
+	}
+}
+
+func TestRunPersistsThisButNotTempThroughHostState(t *testing.T) {
+	first := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.once = "gone";
+			this.saved = "kept";
+		}`,
+	})
+	if first.Err != "" {
+		t.Fatalf("first Run err = %q", first.Err)
+	}
+	second := Run(Config{
+		EventName: "onActionServerside",
+		This:      first.This,
+		Script: `function onActionServerside() {
+			if (this.saved == "kept" && typeof temp.once == "undefined") echo("ok");
+		}`,
+	})
+	if second.Err != "" {
+		t.Fatalf("second Run err = %q", second.Err)
+	}
+	if len(second.Output) != 1 || second.Output[0] != "ok" {
+		t.Fatalf("second output = %#v this=%#v", second.Output, second.This)
 	}
 }
 
