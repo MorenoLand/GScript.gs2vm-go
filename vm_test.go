@@ -75,3 +75,61 @@ function onCreated() { echo("client"); }`,
 		t.Fatalf("Run output = %#v", result.Output)
 	}
 }
+
+func TestRunCapturesPlayerClientFlags(t *testing.T) {
+	result := Run(Config{
+		EventName:   "onCreated",
+		Player:      map[string]string{"account": "moondeath"},
+		PlayerFlags: map[string]string{"client.old": "1"},
+		Script: `function onCreated() {
+			player.client.foo = "bar";
+			player.clientr.secret = "ok";
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if !hasPlayerFlag(result.PlayerFlags, "moondeath", "client.foo", "bar") {
+		t.Fatalf("missing client flag: %#v", result.PlayerFlags)
+	}
+	if !hasPlayerFlag(result.PlayerFlags, "moondeath", "clientr.secret", "ok") {
+		t.Fatalf("missing clientr flag: %#v", result.PlayerFlags)
+	}
+}
+
+func TestRunFindPlayerSendPMAndFlags(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Players: []PlayerContext{
+			{Account: "moondeath", Nickname: "*moondeath", Flags: map[string]string{"clientr.hp": "3"}},
+		},
+		Script: `function onCreated() {
+			temp.pl = findplayer("moondeath");
+			if (temp.pl != null) {
+				temp.pl.clientr.hp = "2";
+				temp.pl.sendpm("hey there");
+				temp.pl.sendplayer("second");
+			}
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if !hasPlayerFlag(result.PlayerFlags, "moondeath", "clientr.hp", "2") {
+		t.Fatalf("missing findplayer flag update: %#v", result.PlayerFlags)
+	}
+	if len(result.PlayerMessages) != 2 || result.PlayerMessages[0].Account != "moondeath" || result.PlayerMessages[0].Message != "hey there" || result.PlayerMessages[1].Message != "second" {
+		t.Fatalf("PlayerMessages = %#v", result.PlayerMessages)
+	}
+}
+
+func hasPlayerFlag(flags []PlayerFlag, account, name, value string) bool {
+	for _, flag := range flags {
+		if flag.Account == account && flag.Name == name && flag.Value == value {
+			return true
+		}
+	}
+	return false
+}

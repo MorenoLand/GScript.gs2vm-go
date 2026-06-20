@@ -1,6 +1,6 @@
 # GScript.gs2vm-go
 
-Native Go GS2 runtime shim backed by goja.
+Native Go GS2 runtime VM backed by goja.
 
 Current scope:
 - server-side event execution
