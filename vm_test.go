@@ -283,6 +283,7 @@ func TestRunCollectsNPCActions(t *testing.T) {
 		Params:    []string{"kek"},
 		Script: `function onActionBob(prm1) {
 			setshape(1, 32, 48);
+			move(2.5, -1.5, 0.5, 24);
 			chat = "Bob param" SPC prm1 SPC params[0];
 		}`,
 	})
@@ -290,14 +291,20 @@ func TestRunCollectsNPCActions(t *testing.T) {
 	if result.Err != "" {
 		t.Fatalf("Run err = %q", result.Err)
 	}
-	if len(result.NPCActions) != 2 {
+	if len(result.NPCActions) != 3 {
 		t.Fatalf("Run NPCActions = %#v", result.NPCActions)
 	}
 	if result.NPCActions[0].ID != 25 || result.NPCActions[0].ShapeType != 1 || result.NPCActions[0].Width != 32 || result.NPCActions[0].Height != 48 {
 		t.Fatalf("shape action = %#v", result.NPCActions[0])
 	}
-	if result.NPCActions[1].Chat != "Bob param kek kek" {
-		t.Fatalf("chat action = %#v", result.NPCActions[1])
+	if result.NPCActions[1].MoveDX != 2.5 || result.NPCActions[1].MoveDY != -1.5 || result.NPCActions[1].MoveTime != 0.5 || result.NPCActions[1].MoveOptions != 24 {
+		t.Fatalf("move action = %#v", result.NPCActions[1])
+	}
+	if result.NPCActions[2].Chat != "Bob param kek kek" {
+		t.Fatalf("chat action = %#v", result.NPCActions[2])
+	}
+	if len(result.ScheduledEvents) != 1 || result.ScheduledEvents[0].Event != "onMovementFinished" || result.ScheduledEvents[0].Delay != 0.5 {
+		t.Fatalf("move scheduled events = %#v", result.ScheduledEvents)
 	}
 }
 

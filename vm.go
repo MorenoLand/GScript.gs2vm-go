@@ -140,15 +140,19 @@ type FileAction struct {
 }
 
 type NPCAction struct {
-	ID        uint32
-	ShapeType int
-	Width     int
-	Height    int
-	TileTypes []string
-	Chat      string
-	WarpLevel string
-	WarpX     float64
-	WarpY     float64
+	ID          uint32
+	ShapeType   int
+	Width       int
+	Height      int
+	TileTypes   []string
+	Chat        string
+	WarpLevel   string
+	WarpX       float64
+	WarpY       float64
+	MoveDX      float64
+	MoveDY      float64
+	MoveTime    float64
+	MoveOptions int
 }
 
 type SocketAction struct {
@@ -316,6 +320,16 @@ func Run(config Config) Result {
 	vm.Set("warpto", func(call goja.FunctionCall) goja.Value {
 		if config.NPCID != 0 {
 			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, WarpLevel: valueString(call.Argument(0)), WarpX: valueFloat(call.Argument(1)), WarpY: valueFloat(call.Argument(2))})
+		}
+		return goja.Undefined()
+	})
+	vm.Set("move", func(call goja.FunctionCall) goja.Value {
+		if config.NPCID != 0 {
+			action := NPCAction{ID: config.NPCID, MoveDX: valueFloat(call.Argument(0)), MoveDY: valueFloat(call.Argument(1)), MoveTime: valueFloat(call.Argument(2)), MoveOptions: int(valueInt(call.Argument(3)))}
+			result.NPCActions = append(result.NPCActions, action)
+			if action.MoveOptions&8 != 0 {
+				result.ScheduledEvents = append(result.ScheduledEvents, ScheduledEvent{Delay: action.MoveTime, Event: "onMovementFinished"})
+			}
 		}
 		return goja.Undefined()
 	})
