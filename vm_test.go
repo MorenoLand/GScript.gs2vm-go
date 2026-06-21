@@ -1227,7 +1227,7 @@ func TestRunRCChatHelpersAndRights(t *testing.T) {
 		},
 		Script: `function getFile(file) return base64encode(temp.mp.loadstring(findfiles(file, true)[0]) ? mp : mp);
 			function onRCChat(cmd, data) {
-				if (cmd == "newrc" && player.hasrightflag("warptoxy")) sendtonc(format("RC Detection: %s (%s)", "RC3", data));
+				if (cmd == "newrc" && player.hasrightflag("warptoxy")) printf("RC Detection: %s (%s)", "RC3", data);
 				if (cmd == "file") player.sendtorc(format("file:%s:%s", getextension(data), getFile(data)));
 			}`,
 		Params: []string{"newrc", "2015.10.31"},

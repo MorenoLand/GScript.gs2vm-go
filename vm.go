@@ -314,6 +314,13 @@ func Run(config Config) Result {
 		}
 		return goja.Undefined()
 	})
+	vm.Set("printf", func(call goja.FunctionCall) goja.Value {
+		message := formatStringCall(call)
+		if message != "" {
+			result.NCMessages = append(result.NCMessages, message)
+		}
+		return goja.Undefined()
+	})
 	vm.Set("setshape", func(call goja.FunctionCall) goja.Value {
 		if config.NPCID != 0 {
 			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, ShapeType: int(valueInt(call.Argument(0))), Width: int(valueInt(call.Argument(1))), Height: int(valueInt(call.Argument(2)))})
@@ -947,15 +954,7 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 	vm.Set("char", func(call goja.FunctionCall) goja.Value { return vm.ToValue(string(rune(valueInt(call.Argument(0))))) })
 	vm.Set("strlen", func(call goja.FunctionCall) goja.Value { return vm.ToValue(len(valueString(call.Argument(0)))) })
 	vm.Set("format", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) == 0 {
-			return vm.ToValue("")
-		}
-		format := valueString(call.Argument(0))
-		args := make([]any, 0, len(call.Arguments)-1)
-		for _, arg := range call.Arguments[1:] {
-			args = append(args, arg.Export())
-		}
-		return vm.ToValue(fmt.Sprintf(format, args...))
+		return vm.ToValue(formatStringCall(call))
 	})
 	vm.Set("getextension", func(call goja.FunctionCall) goja.Value {
 		ext := strings.TrimPrefix(path.Ext(valueString(call.Argument(0))), ".")
@@ -2230,6 +2229,18 @@ func valueString(value goja.Value) string {
 	default:
 		return value.String()
 	}
+}
+
+func formatStringCall(call goja.FunctionCall) string {
+	if len(call.Arguments) == 0 {
+		return ""
+	}
+	format := valueString(call.Argument(0))
+	args := make([]any, 0, len(call.Arguments)-1)
+	for _, arg := range call.Arguments[1:] {
+		args = append(args, arg.Export())
+	}
+	return fmt.Sprintf(format, args...)
 }
 
 func valueInt(value goja.Value) int64 {
