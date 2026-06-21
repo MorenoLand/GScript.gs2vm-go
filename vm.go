@@ -59,8 +59,9 @@ type PlayerFlag struct {
 }
 
 type ServerFlag struct {
-	Name  string
-	Value string
+	Name    string
+	Value   string
+	Deleted bool
 }
 
 type PlayerMessage struct {
@@ -702,10 +703,17 @@ func collectServerFlagObject(result *Result, prefix string, obj *goja.Object, in
 	if obj == nil {
 		return
 	}
+	seen := make(map[string]bool)
 	for _, key := range obj.Keys() {
+		seen[key] = true
 		value := valueString(obj.Get(key))
 		if initial[key] != value {
 			result.ServerFlags = append(result.ServerFlags, ServerFlag{Name: prefix + key, Value: value})
+		}
+	}
+	for key := range initial {
+		if !seen[key] {
+			result.ServerFlags = append(result.ServerFlags, ServerFlag{Name: prefix + key, Deleted: true})
 		}
 	}
 }

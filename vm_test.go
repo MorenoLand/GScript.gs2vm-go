@@ -49,6 +49,7 @@ func TestRunCollectsMutableServerFlags(t *testing.T) {
 		Script: `function onCreated() {
 			server.foo = "bar";
 			serverr.secret = "yes";
+			delete server.old;
 			serveroptions.staff = "changed";
 		}`,
 		ServerFlags:   map[string]string{"server.old": "1"},
@@ -58,15 +59,20 @@ func TestRunCollectsMutableServerFlags(t *testing.T) {
 	if result.Err != "" {
 		t.Fatalf("Run err = %q", result.Err)
 	}
-	if len(result.ServerFlags) != 2 {
+	if len(result.ServerFlags) != 3 {
 		t.Fatalf("Run ServerFlags = %#v", result.ServerFlags)
 	}
 	flags := map[string]string{}
+	deleted := map[string]bool{}
 	for _, flag := range result.ServerFlags {
 		flags[flag.Name] = flag.Value
+		deleted[flag.Name] = flag.Deleted
 	}
 	if flags["server.foo"] != "bar" || flags["serverr.secret"] != "yes" {
 		t.Fatalf("Run ServerFlags = %#v", result.ServerFlags)
+	}
+	if !deleted["server.old"] {
+		t.Fatalf("Run ServerFlags missing deleted server.old: %#v", result.ServerFlags)
 	}
 	if _, ok := flags["serveroptions.staff"]; ok {
 		t.Fatalf("serveroptions write was returned as mutable flag: %#v", result.ServerFlags)
