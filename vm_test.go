@@ -29,8 +29,8 @@ func TestRunEchoesParamsAndPlayerAccount(t *testing.T) {
 func TestRunSupportsOneLineFunctionBodies(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
-		Script:   `function onCreated() foo(), echo("kek"), clientr.foo = "bar"; function foo() echo("tits");`,
-		Player:   map[string]string{"account": "moondeath"},
+		Script:    `function onCreated() foo(), echo("kek"), clientr.foo = "bar"; function foo() echo("tits");`,
+		Player:    map[string]string{"account": "moondeath"},
 	})
 
 	if result.Err != "" {
@@ -298,6 +298,70 @@ func TestRunCollectsNPCActions(t *testing.T) {
 	}
 	if result.NPCActions[1].Chat != "Bob param kek kek" {
 		t.Fatalf("chat action = %#v", result.NPCActions[1])
+	}
+}
+
+func TestRunFindNPCObjectsAndCalls(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		NPCs: []NPCContext{
+			{ID: 10000, Name: "Control-NPC", This: map[string]any{"old": "1"}, Script: `function callMe(value, flag) { echo(value SPC flag); }`},
+			{ID: 10001, Name: "DenDB", Script: `function callMe(value, flag) { echo(value SPC flag); }`},
+		},
+		Script: `function onCreated() {
+			temp.foo = findnpc("Control-NPC");
+			temp.foo.kek = true;
+			findnpcbyid(10000).old = "2";
+			("Control-NPC").other = "yes";
+			DenDB.callMe("Crazy", true);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCFlags) != 3 {
+		t.Fatalf("NPCFlags = %#v", result.NPCFlags)
+	}
+	wantFlags := map[string]string{"kek": "true", "old": "2", "other": "yes"}
+	for _, flag := range result.NPCFlags {
+		if flag.ID != 10000 || flag.Name == "" || wantFlags[flag.Name] != flag.Value {
+			t.Fatalf("unexpected NPC flag %#v all=%#v", flag, result.NPCFlags)
+		}
+		delete(wantFlags, flag.Name)
+	}
+	if len(wantFlags) != 0 {
+		t.Fatalf("missing NPC flags %#v all=%#v", wantFlags, result.NPCFlags)
+	}
+	if len(result.NPCFunctionCalls) != 1 || result.NPCFunctionCalls[0].Name != "DenDB" || result.NPCFunctionCalls[0].Function != "callMe" || result.NPCFunctionCalls[0].Args[0] != "Crazy" || result.NPCFunctionCalls[0].Args[1] != "true" {
+		t.Fatalf("NPCFunctionCalls = %#v", result.NPCFunctionCalls)
+	}
+}
+
+func TestRunUsesScriptThisAsObjectAndString(t *testing.T) {
+	result := Run(Config{
+		ScriptName: "-gr_movement",
+		EventName:  "onCreated",
+		Player:     map[string]string{"account": "Denveous"},
+		Players:    []PlayerContext{{Account: "Denveous"}},
+		Script: `function onCreated() {
+			this.kek = true;
+			findplayer("Denveous").addweapon(this);
+			echo(this.name SPC this);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if result.This["kek"] != true {
+		t.Fatalf("Run this = %#v", result.This)
+	}
+	if len(result.PlayerWeapons) != 1 || result.PlayerWeapons[0].Account != "Denveous" || result.PlayerWeapons[0].Name != "-gr_movement" || !result.PlayerWeapons[0].Add {
+		t.Fatalf("PlayerWeapons = %#v", result.PlayerWeapons)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "-gr_movement -gr_movement" {
+		t.Fatalf("Output = %#v", result.Output)
 	}
 }
 
@@ -621,6 +685,91 @@ func TestRunCollectsPlayerWeaponActions(t *testing.T) {
 		if result.PlayerWeapons[i] != want[i] {
 			t.Fatalf("PlayerWeapons[%d] = %#v want %#v", i, result.PlayerWeapons[i], want[i])
 		}
+	}
+}
+
+func TestRunExposesPlayerCollectionsAndHelpers(t *testing.T) {
+	root := filepath.Join(".", ".tmp", "gs2vm-file-helpers")
+	_ = os.RemoveAll(root)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	result := Run(Config{
+		EventName: "onCreated",
+		FileRoot:  root,
+		Players:   []PlayerContext{{ID: 7, Account: "Denveous"}, {ID: 8, Account: "bob"}},
+		Script: `function onCreated() {
+			for (temp.p: allplayers) if (p.account == "Denveous") echo(p.id);
+			echo(players[1].account);
+			echo(players[1].id);
+			temp.encrypted = base64encode(des_encrypt("12345678", "Hello World"));
+			echo(des_decrypt("12345678", base64decode(temp.encrypted)));
+			savelog2("kek.txt", "hi");
+			savestring("delete-me.txt", "x", 0);
+			echo(deletefile("delete-me.txt"));
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	want := []string{"7", "bob", "8", "Hello World", "true"}
+	if len(result.Output) != len(want) {
+		t.Fatalf("Output = %#v", result.Output)
+	}
+	for i := range want {
+		if result.Output[i] != want[i] {
+			t.Fatalf("Output[%d] = %q want %q all=%#v", i, result.Output[i], want[i], result.Output)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(root, "logs", "kek.txt"))
+	if err != nil || string(data) != "hi\n" {
+		t.Fatalf("log file data=%q err=%v", string(data), err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "delete-me.txt")); !os.IsNotExist(err) {
+		t.Fatalf("delete-me stat err=%v", err)
+	}
+}
+
+func TestRunFileHelpersRespectRights(t *testing.T) {
+	root := filepath.Join(".", ".tmp", "gs2vm-file-rights")
+	_ = os.RemoveAll(root)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data", "read.txt"), []byte("ok"), 0644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	result := Run(Config{
+		EventName:  "onCreated",
+		FileRoot:   root,
+		FileRights: []string{"r data/read.txt", "w data/write.txt", "w logs/*"},
+		Script: `function onCreated() {
+			echo(loadstring("data/read.txt"));
+			echo(loadstring("data/write.txt"));
+			echo(savestring("data/read.txt", "no", 0));
+			echo(savestring("data/write.txt", "yes", 0));
+			echo(deletefile("data/read.txt"));
+			savelog2("kek.txt", "hi");
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	want := []string{"ok", "", "false", "true", "false"}
+	if len(result.Output) != len(want) {
+		t.Fatalf("Output = %#v", result.Output)
+	}
+	for i := range want {
+		if result.Output[i] != want[i] {
+			t.Fatalf("Output[%d] = %q want %q all=%#v", i, result.Output[i], want[i], result.Output)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "data", "write.txt")); err != nil || string(data) != "yes" {
+		t.Fatalf("write data=%q err=%v", string(data), err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "logs", "kek.txt")); err != nil || string(data) != "hi\n" {
+		t.Fatalf("log data=%q err=%v", string(data), err)
 	}
 }
 
