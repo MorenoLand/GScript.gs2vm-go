@@ -357,7 +357,15 @@ func Run(config Config) Result {
 	})
 	vm.Set("showcharacter", func(call goja.FunctionCall) goja.Value {
 		if config.NPCID != 0 {
-			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, Props: map[string]string{"image": "#c#", "head": "head0.png", "body": "body.png", "shield": "shield1.png", "sword": "sword1.png", "colors": "2,5,21,5,21", "ani": "idle", "width": "32", "height": "48"}})
+			thisObj.Set("image", "#c#")
+			thisObj.Set("headimg", "head0.png")
+			thisObj.Set("bodyimg", "body.png")
+			thisObj.Set("shieldimg", "shield1.png")
+			thisObj.Set("swordimg", "sword1.png")
+			thisObj.Set("ani", "idle")
+			thisObj.Set("colors", vm.NewArray("2", "5", "21", "5", "21"))
+			thisObj.Set("width", 32)
+			thisObj.Set("height", 48)
 		}
 		return goja.Undefined()
 	})
@@ -603,13 +611,13 @@ func installCurrentNPCFunctions(vm *goja.Runtime, thisObj *goja.Object) {
 			thisObj.Set("shieldimg", "shield1.png")
 			thisObj.Set("swordimg", "sword1.png")
 			thisObj.Set("ani", "idle")
-			thisObj.Set("colors", []string{"2", "5", "21", "5", "21"})
+			thisObj.Set("colors", vm.NewArray("2", "5", "21", "5", "21"))
 			thisObj.Set("width", 32)
 			thisObj.Set("height", 48)
 			return goja.Undefined()
 		},
-		"canwarp": func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp", true); return goja.Undefined() },
-		"canwarp2":        func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp2", true); return goja.Undefined() },
+		"canwarp":  func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp", true); return goja.Undefined() },
+		"canwarp2": func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp2", true); return goja.Undefined() },
 		"cannotwarp": func(call goja.FunctionCall) goja.Value {
 			setBoolFlag("canwarp", false)
 			setBoolFlag("canwarp2", false)

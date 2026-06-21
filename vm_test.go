@@ -78,6 +78,29 @@ func TestRunShowCharacterAppliesDefaultCharacterProps(t *testing.T) {
 	}
 }
 
+func TestRunShowCharacterAllowsIndexedColorWrites(t *testing.T) {
+	result := Run(Config{
+		ScriptName: "Control-NPC",
+		EventName:  "onCreated",
+		NPCID:      7,
+		Script: `function onCreated() {
+			showcharacter();
+			this.colors[0] = "orange";
+			this.colors[1] = "white";
+			this.colors[2] = "blue";
+			this.colors[3] = "red";
+			this.colors[4] = "black";
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCActions) == 0 || result.NPCActions[0].Props["colors"] != "orange,white,blue,red,black" {
+		t.Fatalf("NPC actions = %#v", result.NPCActions)
+	}
+}
+
 func TestRunPlayerLifecycleEventPassesPlayerObjectArgument(t *testing.T) {
 	result := Run(Config{
 		EventName: "onPlayerLogin",
