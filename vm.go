@@ -1,8 +1,10 @@
 package gs2vm
 
 import (
+	"encoding/base64"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/dop251/goja"
@@ -26,6 +28,7 @@ type Result struct {
 	ClientTriggers []ClientTrigger
 	PlayerFlags    []PlayerFlag
 	PlayerMessages []PlayerMessage
+	PlayerWarps    []PlayerWarp
 	This           map[string]any
 	Err            string
 }
@@ -55,6 +58,13 @@ type PlayerMessage struct {
 	Message string
 }
 
+type PlayerWarp struct {
+	Account string
+	Level   string
+	X       float64
+	Y       float64
+}
+
 type scriptPlayerObject struct {
 	account        string
 	client         *goja.Object
@@ -64,23 +74,40 @@ type scriptPlayerObject struct {
 }
 
 var spcPattern = regexp.MustCompile(`(?i)\s+SPC\s+`)
+var concatPattern = regexp.MustCompile(`\s+@\s+`)
 var tempAssignPattern = regexp.MustCompile(`\btemp\.([A-Za-z_][A-Za-z0-9_]*)\s*=`)
+var enumPattern = regexp.MustCompile(`(?is)\benum\s*\{([^{}]*)\}`)
+var arrayAssignPattern = regexp.MustCompile(`=\s*\{([^{}\n;]*)\}`)
+var newArrayPattern = regexp.MustCompile(`new\s*\[([^\]]*)\]`)
 
 func Run(config Config) Result {
 	vm := goja.New()
 	result := Result{}
 	src := Translate(StripClientside(config.Script))
 	players := make([]scriptPlayerObject, 0, len(config.Players)+1)
+	drawings := make(map[int64]*goja.Object)
 	thisObj := objectFromAnyMap(vm, config.This)
 
 	vm.Set("name", config.ScriptName)
 	vm.Set("params", append([]string(nil), config.Params...))
 	vm.Set("temp", vm.NewObject())
+	vm.Set("TAB", "\t")
+	vm.Set("NL", "\n")
+	vm.Set("screenwidth", 1024)
+	vm.Set("screenheight", 1024)
 	currentPlayer := playerContextFromMap(config.Player, config.PlayerFlags)
 	currentPlayerObject := playerObject(vm, &result, currentPlayer, &players)
 	vm.Set("player", currentPlayerObject)
 	vm.Set("client", currentPlayerObject.Get("client"))
 	vm.Set("clientr", currentPlayerObject.Get("clientr"))
+	vm.Set("setlevel", func(call goja.FunctionCall) goja.Value {
+		addPlayerWarp(&result, currentPlayer.Account, valueString(call.Argument(0)), 0, 0)
+		return goja.Undefined()
+	})
+	vm.Set("setlevel2", func(call goja.FunctionCall) goja.Value {
+		addPlayerWarp(&result, currentPlayer.Account, valueString(call.Argument(0)), valueFloat(call.Argument(1)), valueFloat(call.Argument(2)))
+		return goja.Undefined()
+	})
 	vm.Set("server", objectFromPrefixedMap(vm, config.ServerFlags, "server."))
 	vm.Set("serverr", objectFromPrefixedMap(vm, config.ServerFlags, "serverr."))
 	vm.Set("serveroptions", objectFromMap(vm, config.ServerOptions))
@@ -91,6 +118,54 @@ func Run(config Config) Result {
 		}
 		result.Output = append(result.Output, strings.Join(parts, " "))
 		return goja.Undefined()
+	})
+	vm.Set("base64encode", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(base64.StdEncoding.EncodeToString([]byte(valueString(call.Argument(0)))))
+	})
+	vm.Set("base64decode", func(call goja.FunctionCall) goja.Value {
+		decoded, err := base64.StdEncoding.DecodeString(valueString(call.Argument(0)))
+		if err != nil {
+			return vm.ToValue("")
+		}
+		return vm.ToValue(string(decoded))
+	})
+	vm.Set("getimgwidth", func(call goja.FunctionCall) goja.Value {
+		if strings.TrimSpace(valueString(call.Argument(0))) == "" {
+			return vm.ToValue(0)
+		}
+		return vm.ToValue(1)
+	})
+	vm.Set("getimgheight", func(call goja.FunctionCall) goja.Value {
+		if strings.TrimSpace(valueString(call.Argument(0))) == "" {
+			return vm.ToValue(0)
+		}
+		return vm.ToValue(1)
+	})
+	vm.Set("showimg", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 4 {
+			return vm.ToValue(0)
+		}
+		index := valueInt(call.Argument(0))
+		obj := drawings[index]
+		if obj == nil {
+			obj = vm.NewObject()
+			obj.Set("rotation", 0)
+			drawings[index] = obj
+		}
+		obj.Set("index", index)
+		obj.Set("image", valueString(call.Argument(1)))
+		obj.Set("x", valueString(call.Argument(2)))
+		obj.Set("y", valueString(call.Argument(3)))
+		return vm.ToValue(0)
+	})
+	vm.Set("findimg", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return goja.Null()
+		}
+		if obj := drawings[valueInt(call.Argument(0))]; obj != nil {
+			return obj
+		}
+		return goja.Null()
 	})
 	vm.Set("triggerclient", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 2 {
@@ -140,8 +215,45 @@ func StripClientside(script string) string {
 }
 
 func Translate(script string) string {
+	script = translateEnums(script)
+	script = arrayAssignPattern.ReplaceAllString(script, `= [$1]`)
+	script = newArrayPattern.ReplaceAllString(script, `new Array($1)`)
+	script = strings.ReplaceAll(script, ".size()", ".length")
 	script = spcPattern.ReplaceAllString(script, ` + " " + `)
+	script = strings.ReplaceAll(script, "@=", "+=")
+	script = concatPattern.ReplaceAllString(script, ` + `)
 	return aliasTempAssignments(script)
+}
+
+func translateEnums(script string) string {
+	return enumPattern.ReplaceAllStringFunc(script, func(block string) string {
+		match := enumPattern.FindStringSubmatch(block)
+		if len(match) != 2 {
+			return block
+		}
+		names := strings.Split(match[1], ",")
+		var out strings.Builder
+		index := 0
+		for _, raw := range names {
+			name := strings.TrimSpace(raw)
+			if idx := strings.Index(name, "//"); idx >= 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
+			if name == "" {
+				continue
+			}
+			if out.Len() > 0 {
+				out.WriteByte('\n')
+			}
+			out.WriteString("var ")
+			out.WriteString(name)
+			out.WriteString(" = ")
+			out.WriteString(strconv.Itoa(index))
+			out.WriteByte(';')
+			index++
+		}
+		return out.String()
+	})
 }
 
 func aliasTempAssignments(script string) string {
@@ -234,8 +346,23 @@ func playerObject(vm *goja.Runtime, result *Result, player PlayerContext, player
 	}
 	obj.Set("sendpm", send)
 	obj.Set("sendplayer", send)
+	obj.Set("setlevel", func(call goja.FunctionCall) goja.Value {
+		addPlayerWarp(result, player.Account, valueString(call.Argument(0)), 0, 0)
+		return goja.Undefined()
+	})
+	obj.Set("setlevel2", func(call goja.FunctionCall) goja.Value {
+		addPlayerWarp(result, player.Account, valueString(call.Argument(0)), valueFloat(call.Argument(1)), valueFloat(call.Argument(2)))
+		return goja.Undefined()
+	})
 	*players = append(*players, scriptPlayerObject{account: player.Account, client: client, clientr: clientr, initialClient: clientFlags, initialClientr: clientrFlags})
 	return obj
+}
+
+func addPlayerWarp(result *Result, account, level string, x, y float64) {
+	if result == nil || account == "" {
+		return
+	}
+	result.PlayerWarps = append(result.PlayerWarps, PlayerWarp{Account: account, Level: level, X: x, Y: y})
 }
 
 func flagValues(flags map[string]string, prefix string) map[string]string {
@@ -325,5 +452,37 @@ func valueString(value goja.Value) string {
 		return strings.Join(parts, ",")
 	default:
 		return value.String()
+	}
+}
+
+func valueInt(value goja.Value) int64 {
+	switch typed := value.Export().(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return parsed
+	default:
+		return int64(value.ToInteger())
+	}
+}
+
+func valueFloat(value goja.Value) float64 {
+	switch typed := value.Export().(type) {
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case float64:
+		return typed
+	case string:
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return parsed
+	default:
+		return value.ToFloat()
 	}
 }

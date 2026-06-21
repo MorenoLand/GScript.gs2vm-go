@@ -60,6 +60,40 @@ func TestRunCollectsTriggerClient(t *testing.T) {
 	}
 }
 
+func TestRunBase64AndScreenGlobals(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			echo(base64decode(base64encode("kek")) SPC screenwidth SPC screenheight);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "kek 1024 1024" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunImageHelpers(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			showimg(200, "block.png", 4, 5);
+			findimg(200).rotation = 3;
+			echo(findimg(200).image SPC findimg(200).rotation SPC getimgwidth("block.png") SPC getimgheight("block.png"));
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "block.png 3 1 1" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
 func TestRunIgnoresClientsideBlock(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
@@ -147,6 +181,78 @@ func TestRunTempAssignmentCreatesBareAliasForCurrentEvent(t *testing.T) {
 	}
 	if len(result.PlayerMessages) != 1 || result.PlayerMessages[0].Message != "kek" {
 		t.Fatalf("PlayerMessages = %#v", result.PlayerMessages)
+	}
+}
+
+func TestRunCollectsPlayerSetLevelActions(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Player:    map[string]string{"account": "moondeath"},
+		Script: `function onCreated() {
+			setlevel2("self.nw", 12, 13);
+			player.setlevel("inside.nw");
+			player.setlevel2("outside.nw", 30, 13.5);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.PlayerWarps) != 3 {
+		t.Fatalf("PlayerWarps = %#v", result.PlayerWarps)
+	}
+	if result.PlayerWarps[0].Account != "moondeath" || result.PlayerWarps[0].Level != "self.nw" || result.PlayerWarps[0].X != 12 || result.PlayerWarps[0].Y != 13 {
+		t.Fatalf("first warp = %#v", result.PlayerWarps[0])
+	}
+	if result.PlayerWarps[1].Account != "moondeath" || result.PlayerWarps[1].Level != "inside.nw" {
+		t.Fatalf("second warp = %#v", result.PlayerWarps[1])
+	}
+	if result.PlayerWarps[2].Account != "moondeath" || result.PlayerWarps[2].Level != "outside.nw" || result.PlayerWarps[2].X != 30 || result.PlayerWarps[2].Y != 13.5 {
+		t.Fatalf("third warp = %#v", result.PlayerWarps[2])
+	}
+}
+
+func TestRunTranslatesGS2ConcatenatorsEnumsAndArrays(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `enum {
+			WALK,
+			ATTACK,
+			DEAD
+		}
+		function onCreated() {
+			temp.s = "a";
+			s @= "b";
+			this.health = {5, 7};
+			if (ATTACK == 1 && DEAD == 2) echo(s @ TAB @ this.health[1] @ NL @ "ok");
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "ab\t7\nok" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunTranslatesConstsAndNewArrays(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			const kek = "true";
+			temp.bar = {"foo", "bar"};
+			temp.foo = new[temp.bar.size()];
+			temp.foo[1] = "kek";
+			echo(kek SPC temp.foo.size() SPC temp.foo[1]);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "true 2 kek" {
+		t.Fatalf("Run output = %#v", result.Output)
 	}
 }
 
