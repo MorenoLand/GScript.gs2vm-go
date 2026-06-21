@@ -313,6 +313,43 @@ func TestRunTranslatesConstsAndNewArrays(t *testing.T) {
 	}
 }
 
+func TestRunTranslatesForLoops(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			For (temp.i = 0; temp.i < 3; temp.i++) {
+				echo(temp.i);
+			}
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 3 || result.Output[0] != "0" || result.Output[1] != "1" || result.Output[2] != "2" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunTranslatesForEachLoops(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.foo = {"bar", "echo"};
+			for (temp.bar: temp.foo) {
+				echo(bar);
+			}
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 2 || result.Output[0] != "bar" || result.Output[1] != "echo" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
 func TestRunPersistsThisButNotTempThroughHostState(t *testing.T) {
 	first := Run(Config{
 		EventName: "onCreated",

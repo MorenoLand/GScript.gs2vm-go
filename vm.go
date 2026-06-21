@@ -92,6 +92,9 @@ var tempAssignPattern = regexp.MustCompile(`\btemp\.([A-Za-z_][A-Za-z0-9_]*)\s*=
 var enumPattern = regexp.MustCompile(`(?is)\benum\s*\{([^{}]*)\}`)
 var arrayAssignPattern = regexp.MustCompile(`=\s*\{([^{}\n;]*)\}`)
 var newArrayPattern = regexp.MustCompile(`new\s*\[([^\]]*)\]`)
+var forKeywordPattern = regexp.MustCompile(`(?i)\bfor\s*\(`)
+var tempForPattern = regexp.MustCompile(`\bfor\s*\(\s*temp\.([A-Za-z_][A-Za-z0-9_]*)\s*=([^;]*);([^;]*);([^)]*)\)\s*\{`)
+var forEachPattern = regexp.MustCompile(`\bfor\s*\(\s*(temp\.)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::|\bin\b)\s*([^)]+)\)\s*\{`)
 
 func Run(config Config) Result {
 	vm := goja.New()
@@ -245,11 +248,43 @@ func Translate(script string) string {
 	script = translateEnums(script)
 	script = arrayAssignPattern.ReplaceAllString(script, `= [$1]`)
 	script = newArrayPattern.ReplaceAllString(script, `new Array($1)`)
+	script = forKeywordPattern.ReplaceAllString(script, `for (`)
+	script = translateForEachLoops(script)
+	script = translateTempForLoops(script)
 	script = strings.ReplaceAll(script, ".size()", ".length")
 	script = spcPattern.ReplaceAllString(script, ` + " " + `)
 	script = strings.ReplaceAll(script, "@=", "+=")
 	script = concatPattern.ReplaceAllString(script, ` + `)
 	return aliasTempAssignments(script)
+}
+
+func translateForEachLoops(script string) string {
+	return forEachPattern.ReplaceAllStringFunc(script, func(loop string) string {
+		match := forEachPattern.FindStringSubmatch(loop)
+		if len(match) != 4 {
+			return loop
+		}
+		name := match[2]
+		source := strings.TrimSpace(match[3])
+		if match[1] != "" {
+			return "for (" + name + " of " + source + ") { temp." + name + " = " + name + ";"
+		}
+		return "for (" + name + " of " + source + ") {"
+	})
+}
+
+func translateTempForLoops(script string) string {
+	return tempForPattern.ReplaceAllStringFunc(script, func(loop string) string {
+		match := tempForPattern.FindStringSubmatch(loop)
+		if len(match) != 5 {
+			return loop
+		}
+		name := match[1]
+		init := strings.TrimSpace(match[2])
+		condition := strings.ReplaceAll(strings.TrimSpace(match[3]), "temp."+name, name)
+		post := strings.ReplaceAll(strings.TrimSpace(match[4]), "temp."+name, name)
+		return "for (" + name + " =" + init + "; " + condition + "; " + post + ") { temp." + name + " = " + name + ";"
+	})
 }
 
 func translateEnums(script string) string {
