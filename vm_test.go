@@ -3,6 +3,7 @@ package gs2vm
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,41 @@ func TestRunEchoesParamsAndPlayerAccount(t *testing.T) {
 	}
 }
 
+func TestRunSupportsOneLineFunctionBodies(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script:   `function onCreated() foo(), echo("kek"), clientr.foo = "bar"; function foo() echo("tits");`,
+		Player:   map[string]string{"account": "moondeath"},
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 2 || result.Output[0] != "tits" || result.Output[1] != "kek" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	if !hasPlayerFlag(result.PlayerFlags, "moondeath", "clientr.foo", "bar") {
+		t.Fatalf("missing clientr flag: %#v", result.PlayerFlags)
+	}
+}
+
+func TestRunPlayerLifecycleEventPassesPlayerObjectArgument(t *testing.T) {
+	result := Run(Config{
+		EventName: "onPlayerLogin",
+		Player:    map[string]string{"account": "bob", "nickname": "Bob"},
+		Script: `function onPlayerLogin(pl) {
+			echo("+" SPC pl.account SPC params[0].account);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "+ bob bob" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
 func TestRunExposesServerFlagsAndOptions(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
@@ -40,6 +76,41 @@ func TestRunExposesServerFlagsAndOptions(t *testing.T) {
 	}
 	if len(result.Output) != 1 || result.Output[0] != "true moondeath" {
 		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsIndexedTypedServerFlagValues(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			if (serverr.poopybutthole[0] == true) {
+				echo(serverr.poopybutthole[1]);
+			}
+		}`,
+		ServerFlags: map[string]string{"serverr.poopybutthole": "true,2"},
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "2" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunStopsAtMaxLoopLimit(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			maxlooplimit = 3;
+			for (temp.i = 0; temp.i < 10; temp.i++) {
+				echo(temp.i);
+			}
+		}`,
+	})
+
+	if result.Err == "" || !strings.Contains(result.Err, "maxlooplimit") {
+		t.Fatalf("Run err = %q output=%#v", result.Err, result.Output)
 	}
 }
 
@@ -236,14 +307,79 @@ func TestRunSupportsMoreParityHelpers(t *testing.T) {
 		Script: `function onCreated() {
 			temp.word = "abcdef";
 			echo(temp.word.substring(2, 3) SPC ("b" in {"a", "b", "c"}) SPC "  Hi ".trim().lower() SPC strlen("abcd"));
+			temp.foo = "bar";
+			echo(foo.pos("r") SPC "abcdef".startswith("abc") SPC "abcdef".endswith("def") SPC foo.starts("ba") SPC foo.ends("ar"));
+			echo(temp.word.substring(3));
 		}`,
 	})
 
 	if result.Err != "" {
 		t.Fatalf("Run err = %q", result.Err)
 	}
-	if len(result.Output) != 1 || result.Output[0] != "cde true hi 4" {
+	if len(result.Output) != 3 || result.Output[0] != "cde true hi 4" || result.Output[1] != "2 true true true true" || result.Output[2] != "def" {
 		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsCommonGlobalParityHelpers(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			echo(abs(-2) SPC ceil(1.2) SPC floor(1.8) SPC int(strtofloat("4.9")));
+			echo(strequals("A", "A") SPC strcontains("abcdef", "cd") SPC contains("abcdef", "ef"));
+			temp.foo = "Hello WORLD";
+			echo(startswith("abcdef", "ab") SPC endswith("abcdef", "ef") SPC uppercase("hi") SPC lowercase("HI") SPC foo.upper() SPC foo.lower());
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 3 {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	if result.Output[0] != "2 2 1 4" || result.Output[1] != "true true true" || result.Output[2] != "true true HI hi HELLO WORLD hello world" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsStringMethodReceiversOnLiteralsAndExpressions(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Player:    map[string]string{"account": "moondeath"},
+		Script: `function onCreated() {
+			echo("HEY THERE".lower());
+			echo(("HEY THERE " @ player.account).lower());
+			echo(("hey there " @ player.account).upper());
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 3 || result.Output[0] != "hey there" || result.Output[1] != "hey there moondeath" || result.Output[2] != "HEY THERE MOONDEATH" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsDynamicPropertyNames(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Player:    map[string]string{"account": "moondeath"},
+		Script: `function onCreated() {
+			this.("kek_" @ player.account) = true;
+			echo(this.("kek_" @ player.account));
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "true" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	if result.This["kek_moondeath"] != true {
+		t.Fatalf("Run this = %#v", result.This)
 	}
 }
 
@@ -397,6 +533,24 @@ func TestRunFindPlayerSendPMAndFlags(t *testing.T) {
 	}
 }
 
+func TestRunSupportsBareSendPMCompatibility(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Player:    map[string]string{"account": "moondeath"},
+		Script: `function onCreated() {
+			sendpm(player.account, "aids");
+			sendplayer(player.account, "second");
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.PlayerMessages) != 2 || result.PlayerMessages[0].Account != "moondeath" || result.PlayerMessages[0].Message != "aids" || result.PlayerMessages[1].Message != "second" {
+		t.Fatalf("PlayerMessages = %#v", result.PlayerMessages)
+	}
+}
+
 func TestRunTempAssignmentCreatesBareAliasForCurrentEvent(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
@@ -494,6 +648,131 @@ func TestRunTranslatesGS2ConcatenatorsEnumsAndArrays(t *testing.T) {
 	}
 }
 
+func TestRunSupportsArrayParityHelpers(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.items = {"b", "a", "c"};
+			temp.items.sortascending();
+			echo(temp.items[0] SPC temp.items[1] SPC temp.items[2]);
+			temp.items.sortdescending();
+			echo(temp.items[0] SPC temp.items[1] SPC temp.items[2]);
+			temp.items.insertarray(1, {"x", "y"});
+			temp.part = temp.items.subarray(1, 3);
+			echo(temp.items[0] SPC temp.items[1] SPC temp.items[2] SPC temp.items[3] SPC temp.items[4]);
+			echo(temp.part[0] SPC temp.part[1] SPC temp.part[2]);
+			trace("traced" SPC temp.part.size());
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	want := []string{"a b c", "c b a", "c x y b a", "x y b", "traced 3"}
+	if len(result.Output) != len(want) {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	for i := range want {
+		if result.Output[i] != want[i] {
+			t.Fatalf("Run output[%d] = %q want %q all=%#v", i, result.Output[i], want[i], result.Output)
+		}
+	}
+}
+
+func TestRunSupportsArrayMutationParityHelpers(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.items = {"a", "b", "c", "d"};
+			temp.items.remove("c");
+			echo(temp.items.size() SPC temp.items[0] SPC temp.items[1] SPC temp.items[2]);
+			temp.items.delete(1);
+			echo(temp.items.size() SPC temp.items[0] SPC temp.items[1]);
+			temp.items.clear();
+			echo(temp.items.size());
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	want := []string{"3 a b d", "2 a d", "0"}
+	if len(result.Output) != len(want) {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	for i := range want {
+		if result.Output[i] != want[i] {
+			t.Fatalf("Run output[%d] = %q want %q all=%#v", i, result.Output[i], want[i], result.Output)
+		}
+	}
+}
+
+func TestRunSupportsArraySortByValue(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.items = new[3];
+			temp.items[0] = new Object();
+			temp.items[0].name = "b";
+			temp.items[0].score = 2;
+			temp.items[1] = new Object();
+			temp.items[1].name = "a";
+			temp.items[1].score = 10;
+			temp.items[2] = new Object();
+			temp.items[2].name = "c";
+			temp.items[2].score = 1;
+			temp.items.sortbyvalue("name", "string", true);
+			echo(temp.items[0].name SPC temp.items[1].name SPC temp.items[2].name);
+			temp.items.sortbyvalue("score", "float", false);
+			echo(temp.items[0].score SPC temp.items[1].score SPC temp.items[2].score);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	want := []string{"a b c", "10 2 1"}
+	if len(result.Output) != len(want) {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	for i := range want {
+		if result.Output[i] != want[i] {
+			t.Fatalf("Run output[%d] = %q want %q all=%#v", i, result.Output[i], want[i], result.Output)
+		}
+	}
+}
+
+func TestRunSupportsMoreArrayObjectMethods(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.items = {"a", "b", "c", "b"};
+			temp.items.addarray({"d", "e"});
+			echo(temp.items[4] SPC temp.items[5] SPC temp.items.size());
+			temp.items.insert(1, "x");
+			echo(temp.items[0] SPC temp.items[1] SPC temp.items[2] SPC temp.items.size());
+			temp.items.replace(2, "y");
+			echo(temp.items[0] SPC temp.items[1] SPC temp.items[2]);
+			echo(temp.items.index("b"));
+			temp.idxs = temp.items.indices("b");
+			echo(temp.idxs.size() SPC temp.idxs[0] SPC temp.idxs[1]);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	want := []string{"d e 6", "a x b 7", "a x y", "4", "1 4 undefined"}
+	if len(result.Output) != len(want) {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	for i := range want {
+		if result.Output[i] != want[i] {
+			t.Fatalf("Run output[%d] = %q want %q all=%#v", i, result.Output[i], want[i], result.Output)
+		}
+	}
+}
+
 func TestRunTranslatesConstsAndNewArrays(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
@@ -511,6 +790,36 @@ func TestRunTranslatesConstsAndNewArrays(t *testing.T) {
 	}
 	if len(result.Output) != 1 || result.Output[0] != "true 2 kek" {
 		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsScreenshotIssueParity(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.grid = new[2][3];
+			temp.grid[1][2] = "ok";
+			echo(temp.grid.size() SPC temp.grid[1].size() SPC temp.grid[1][2]);
+			temp.i = 0;
+			do {
+				temp.i++;
+			} while (temp.i < 3);
+			echo(temp.i);
+			echo(hideimgs(1, 2) SPC keycode(65));
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	want := []string{"2 3 ok", "3", "0 65"}
+	if len(result.Output) != len(want) {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	for i := range want {
+		if result.Output[i] != want[i] {
+			t.Fatalf("Run output[%d] = %q want %q all=%#v", i, result.Output[i], want[i], result.Output)
+		}
 	}
 }
 

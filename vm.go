@@ -4,10 +4,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -144,14 +146,18 @@ var spcPattern = regexp.MustCompile(`(?i)\s+SPC\s+`)
 var tabPattern = regexp.MustCompile(`(?i)([\w\]\)"'])\s+TAB\s+([\w\[\("'])`)
 var nlPattern = regexp.MustCompile(`(?i)([\w\]\)"'])\s+NL\s+([\w\[\("'])`)
 var concatPattern = regexp.MustCompile(`\s+@\s+`)
+var dynamicPropertyPattern = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\.\s*\(([^()\n;]+)\)`)
 var tempAssignPattern = regexp.MustCompile(`\btemp\.([A-Za-z_][A-Za-z0-9_]*)\s*=`)
+var oneLineFunctionPattern = regexp.MustCompile(`(?m)\bfunction\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\(([^)]*)\)\s*([^{}\n;][^\n;]*);`)
 var enumPattern = regexp.MustCompile(`(?is)\benum\s*\{([^{}]*)\}`)
 var arrayAssignPattern = regexp.MustCompile(`=\s*\{([^{}\n;]*)\}`)
 var arrayArgPattern = regexp.MustCompile(`([,(]\s*)\{([^{}\n;]*)\}`)
-var newArrayPattern = regexp.MustCompile(`new\s*\[([^\]]*)\]`)
+var newArrayChainPattern = regexp.MustCompile(`new\s*((?:\[[^\]]*\])+)+`)
+var newArrayDimensionPattern = regexp.MustCompile(`\[([^\]]*)\]`)
 var inArrayPattern = regexp.MustCompile(`(?i)([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\d+(?:\.\d+)?)\s+in\s+\{([^{}\n;]*)\}`)
 var dynamicCallPattern = regexp.MustCompile(`\(\s*@\s*([^)]+?)\s*\)\s*\(([^()]*)\)`)
 var forKeywordPattern = regexp.MustCompile(`(?i)\bfor\s*\(`)
+var loopOpenPattern = regexp.MustCompile(`(?i)\b(for|while)\s*\([^{}]*\)\s*\{`)
 var tempForPattern = regexp.MustCompile(`\bfor\s*\(\s*temp\.([A-Za-z_][A-Za-z0-9_]*)\s*=([^;]*);([^;]*);([^)]*)\)\s*\{`)
 var forEachPattern = regexp.MustCompile(`\bfor\s*\(\s*(temp\.)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::|\bin\b)\s*([^)]+)\)\s*\{`)
 var dottedTempParamFunctionPattern = regexp.MustCompile(`\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*temp\.([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\{`)
@@ -172,6 +178,7 @@ func Run(config Config) Result {
 	vm.Set("allplayers", playerListObject(vm, &result, config.Players, &players))
 	vm.Set("weapons", weaponListObject(vm, config.Weapons))
 	vm.Set("temp", vm.NewObject())
+	vm.Set("maxlooplimit", 10000)
 	vm.Set("TAB", "\t")
 	vm.Set("NL", "\n")
 	vm.Set("NULL", goja.Null())
@@ -182,6 +189,9 @@ func Run(config Config) Result {
 	vm.Set("player", currentPlayerObject)
 	vm.Set("client", currentPlayerObject.Get("client"))
 	vm.Set("clientr", currentPlayerObject.Get("clientr"))
+	if isPlayerLifecycleEvent(config.EventName) && currentPlayer.Account != "" {
+		vm.Set("params", vm.NewArray(currentPlayerObject))
+	}
 	vm.Set("chat", "")
 	serverFlags := flagValues(config.ServerFlags, "server.")
 	serverrFlags := flagValues(config.ServerFlags, "serverr.")
@@ -201,6 +211,22 @@ func Run(config Config) Result {
 	})
 	vm.Set("removeweapon", func(call goja.FunctionCall) goja.Value {
 		addPlayerWeapon(&result, currentPlayer.Account, valueString(call.Argument(0)), false)
+		return goja.Undefined()
+	})
+	vm.Set("sendpm", func(call goja.FunctionCall) goja.Value {
+		account := valueString(call.Argument(0))
+		message := valueString(call.Argument(1))
+		if account != "" && message != "" {
+			result.PlayerMessages = append(result.PlayerMessages, PlayerMessage{Account: account, Message: message})
+		}
+		return goja.Undefined()
+	})
+	vm.Set("sendplayer", func(call goja.FunctionCall) goja.Value {
+		account := valueString(call.Argument(0))
+		message := valueString(call.Argument(1))
+		if account != "" && message != "" {
+			result.PlayerMessages = append(result.PlayerMessages, PlayerMessage{Account: account, Message: message})
+		}
 		return goja.Undefined()
 	})
 	vm.Set("setshape", func(call goja.FunctionCall) goja.Value {
@@ -258,7 +284,27 @@ func Run(config Config) Result {
 		}
 		return vm.ToValue(false)
 	})
+	loopCount := 0
+	vm.Set("__gs2LoopTick", func(call goja.FunctionCall) goja.Value {
+		loopCount++
+		limit := int(valueInt(vm.Get("maxlooplimit")))
+		if limit <= 0 {
+			limit = 10000
+		}
+		if loopCount > limit {
+			panic(vm.NewTypeError("maxlooplimit exceeded"))
+		}
+		return goja.Undefined()
+	})
 	vm.Set("echo", func(call goja.FunctionCall) goja.Value {
+		parts := make([]string, 0, len(call.Arguments))
+		for _, arg := range call.Arguments {
+			parts = append(parts, valueString(arg))
+		}
+		result.Output = append(result.Output, strings.Join(parts, " "))
+		return goja.Undefined()
+	})
+	vm.Set("trace", func(call goja.FunctionCall) goja.Value {
 		parts := make([]string, 0, len(call.Arguments))
 		for _, arg := range call.Arguments {
 			parts = append(parts, valueString(arg))
@@ -344,8 +390,12 @@ func Run(config Config) Result {
 		return result
 	}
 	args := make([]goja.Value, 0, len(config.Params)+1)
-	for _, param := range config.Params {
-		args = append(args, vm.ToValue(param))
+	if isPlayerLifecycleEvent(config.EventName) && currentPlayer.Account != "" {
+		args = append(args, currentPlayerObject)
+	} else {
+		for _, param := range config.Params {
+			args = append(args, vm.ToValue(param))
+		}
 	}
 	var socketObj *goja.Object
 	if config.Socket != nil && len(args) == 0 {
@@ -395,6 +445,7 @@ func StripClientside(script string) string {
 
 func Translate(script string) string {
 	script = regexp.MustCompile(`(?i)\bpublic\s+function\b`).ReplaceAllString(script, `function`)
+	script = translateOneLineFunctions(script)
 	script = dottedTempParamFunctionPattern.ReplaceAllString(script, `function ${1}_${2}(${3}) { temp.${3} = ${3};`)
 	script = dottedFunctionPattern.ReplaceAllString(script, `function ${1}_${2}(`)
 	script = translateTempParams(script)
@@ -403,12 +454,14 @@ func Translate(script string) string {
 	script = translateInArrays(script)
 	script = arrayAssignPattern.ReplaceAllString(script, `= [$1]`)
 	script = arrayArgPattern.ReplaceAllString(script, `$1[$2]`)
-	script = newArrayPattern.ReplaceAllString(script, `new Array($1)`)
+	script = translateNewArrays(script)
 	script = translateDynamicCalls(script)
 	script = forKeywordPattern.ReplaceAllString(script, `for (`)
 	script = translateForEachLoops(script)
 	script = translateTempForLoops(script)
+	script = injectLoopLimitTicks(script)
 	script = strings.ReplaceAll(script, ".size()", ".length")
+	script = translateDynamicProperties(script)
 	script = spcPattern.ReplaceAllString(script, ` + " " + `)
 	script = tabPattern.ReplaceAllString(script, `$1 + "\t" + $2`)
 	script = nlPattern.ReplaceAllString(script, `$1 + "\n" + $2`)
@@ -417,8 +470,93 @@ func Translate(script string) string {
 	return aliasTempAssignments(script)
 }
 
+func isPlayerLifecycleEvent(eventName string) bool {
+	return strings.EqualFold(eventName, "onPlayerLogin") || strings.EqualFold(eventName, "onPlayerLogout")
+}
+
+func translateOneLineFunctions(script string) string {
+	return oneLineFunctionPattern.ReplaceAllStringFunc(script, func(fn string) string {
+		match := oneLineFunctionPattern.FindStringSubmatch(fn)
+		if len(match) != 4 {
+			return fn
+		}
+		return "function " + match[1] + "(" + match[2] + ") { " + strings.Join(splitTopLevelCommas(match[3]), "; ") + "; }"
+	})
+}
+
+func splitTopLevelCommas(text string) []string {
+	parts := []string{}
+	start, depth := 0, 0
+	quote := rune(0)
+	escaped := false
+	for i, r := range text {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if r == '\\' {
+				escaped = true
+			} else if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '"', '\'':
+			quote = r
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(text[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, strings.TrimSpace(text[start:]))
+	out := parts[:0]
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func translateDynamicProperties(script string) string {
+	return dynamicPropertyPattern.ReplaceAllString(script, `$1[$2]`)
+}
+
+func injectLoopLimitTicks(script string) string {
+	return loopOpenPattern.ReplaceAllStringFunc(script, func(loop string) string {
+		return loop + "__gs2LoopTick();"
+	})
+}
+
 func translateInArrays(script string) string {
 	return inArrayPattern.ReplaceAllString(script, `__gs2In($1, [$2])`)
+}
+
+func translateNewArrays(script string) string {
+	return newArrayChainPattern.ReplaceAllStringFunc(script, func(expr string) string {
+		matches := newArrayDimensionPattern.FindAllStringSubmatch(expr, -1)
+		if len(matches) == 0 {
+			return expr
+		}
+		dims := make([]string, 0, len(matches))
+		for _, match := range matches {
+			if len(match) > 1 {
+				dims = append(dims, strings.TrimSpace(match[1]))
+			}
+		}
+		if len(dims) == 1 {
+			return "new Array(" + dims[0] + ")"
+		}
+		return "__newGS2Array(" + strings.Join(dims, ", ") + ")"
+	})
 }
 
 func translateTempParams(script string) string {
@@ -449,6 +587,22 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 	}
 	noOp := func(call goja.FunctionCall) goja.Value { return goja.Undefined() }
 	vm.Set("int", func(call goja.FunctionCall) goja.Value { return vm.ToValue(int(valueFloat(call.Argument(0)))) })
+	vm.Set("float", func(call goja.FunctionCall) goja.Value { return vm.ToValue(valueFloat(call.Argument(0))) })
+	vm.Set("double", func(call goja.FunctionCall) goja.Value { return vm.ToValue(valueFloat(call.Argument(0))) })
+	vm.Set("strtofloat", func(call goja.FunctionCall) goja.Value { return vm.ToValue(valueFloat(call.Argument(0))) })
+	vm.Set("abs", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Abs(valueFloat(call.Argument(0)))) })
+	vm.Set("ceil", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Ceil(valueFloat(call.Argument(0)))) })
+	vm.Set("floor", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Floor(valueFloat(call.Argument(0)))) })
+	vm.Set("sin", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Sin(valueFloat(call.Argument(0)))) })
+	vm.Set("cos", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Cos(valueFloat(call.Argument(0)))) })
+	vm.Set("tan", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Tan(valueFloat(call.Argument(0)))) })
+	vm.Set("strequals", func(call goja.FunctionCall) goja.Value { return vm.ToValue(valueString(call.Argument(0)) == valueString(call.Argument(1))) })
+	vm.Set("strcontains", func(call goja.FunctionCall) goja.Value { return vm.ToValue(strings.Contains(valueString(call.Argument(0)), valueString(call.Argument(1)))) })
+	vm.Set("contains", func(call goja.FunctionCall) goja.Value { return vm.ToValue(strings.Contains(valueString(call.Argument(0)), valueString(call.Argument(1)))) })
+	vm.Set("startswith", func(call goja.FunctionCall) goja.Value { return vm.ToValue(strings.HasPrefix(valueString(call.Argument(0)), valueString(call.Argument(1)))) })
+	vm.Set("endswith", func(call goja.FunctionCall) goja.Value { return vm.ToValue(strings.HasSuffix(valueString(call.Argument(0)), valueString(call.Argument(1)))) })
+	vm.Set("uppercase", func(call goja.FunctionCall) goja.Value { return vm.ToValue(strings.ToUpper(valueString(call.Argument(0)))) })
+	vm.Set("lowercase", func(call goja.FunctionCall) goja.Value { return vm.ToValue(strings.ToLower(valueString(call.Argument(0)))) })
 	vm.Set("random", func(call goja.FunctionCall) goja.Value {
 		min := valueFloat(call.Argument(0))
 		max := valueFloat(call.Argument(1))
@@ -459,6 +613,19 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 	})
 	vm.Set("char", func(call goja.FunctionCall) goja.Value { return vm.ToValue(string(rune(valueInt(call.Argument(0))))) })
 	vm.Set("strlen", func(call goja.FunctionCall) goja.Value { return vm.ToValue(len(valueString(call.Argument(0)))) })
+	vm.Set("hideimgs", func(call goja.FunctionCall) goja.Value { return vm.ToValue(0) })
+	vm.Set("keycode", func(call goja.FunctionCall) goja.Value { return vm.ToValue(valueInt(call.Argument(0))) })
+	vm.Set("__newGS2Array", func(call goja.FunctionCall) goja.Value {
+		dims := make([]int, 0, len(call.Arguments))
+		for _, arg := range call.Arguments {
+			size := int(valueInt(arg))
+			if size < 0 {
+				size = 0
+			}
+			dims = append(dims, size)
+		}
+		return vm.ToValue(newGS2Array(dims))
+	})
 	vm.Set("isObject", func(call goja.FunctionCall) goja.Value {
 		arg := call.Argument(0)
 		return vm.ToValue(arg != nil && !goja.IsUndefined(arg) && !goja.IsNull(arg) && arg.ToObject(vm) != nil)
@@ -660,6 +827,155 @@ func installFileFunctions(vm *goja.Runtime, root string) {
 			obj.Set("length", length)
 			return call.This
 		})
+		proto.Set("addarray", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			values = append(values, arrayValues(call.Argument(0))...)
+			replaceArrayValues(vm, call.This.ToObject(vm), values)
+			return call.This
+		})
+		proto.Set("insert", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			index := int(valueInt(call.Argument(0)))
+			if index < 0 {
+				index = 0
+			}
+			if index > len(values) {
+				index = len(values)
+			}
+			values = append(values[:index], append([]any{call.Argument(1).Export()}, values[index:]...)...)
+			replaceArrayValues(vm, call.This.ToObject(vm), values)
+			return call.This
+		})
+		proto.Set("replace", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			index := int(valueInt(call.Argument(0)))
+			if index >= 0 && index < len(values) {
+				values[index] = call.Argument(1).Export()
+				replaceArrayValues(vm, call.This.ToObject(vm), values)
+			}
+			return call.This
+		})
+		proto.Set("index", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			needle := fmt.Sprint(call.Argument(0).Export())
+			for i, value := range values {
+				if fmt.Sprint(value) == needle {
+					return vm.ToValue(i)
+				}
+			}
+			return vm.ToValue(-1)
+		})
+		proto.Set("indices", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			needle := fmt.Sprint(call.Argument(0).Export())
+			var indices []int
+			for i, value := range values {
+				if fmt.Sprint(value) == needle {
+					indices = append(indices, i)
+				}
+			}
+			return vm.ToValue(indices)
+		})
+		proto.Set("delete", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			index := int(valueInt(call.Argument(0)))
+			if index >= 0 && index < len(values) {
+				values = append(values[:index], values[index+1:]...)
+				replaceArrayValues(vm, call.This.ToObject(vm), values)
+			}
+			return call.This
+		})
+		proto.Set("remove", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			needle := call.Argument(0).Export()
+			for i, value := range values {
+				if fmt.Sprint(value) == fmt.Sprint(needle) {
+					values = append(values[:i], values[i+1:]...)
+					replaceArrayValues(vm, call.This.ToObject(vm), values)
+					break
+				}
+			}
+			return call.This
+		})
+		proto.Set("clear", func(call goja.FunctionCall) goja.Value {
+			replaceArrayValues(vm, call.This.ToObject(vm), nil)
+			return call.This
+		})
+		proto.Set("sortascending", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			sort.SliceStable(values, func(i, j int) bool { return fmt.Sprint(values[i]) < fmt.Sprint(values[j]) })
+			replaceArrayValues(vm, call.This.ToObject(vm), values)
+			return call.This
+		})
+		proto.Set("sortdescending", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			sort.SliceStable(values, func(i, j int) bool { return fmt.Sprint(values[i]) > fmt.Sprint(values[j]) })
+			replaceArrayValues(vm, call.This.ToObject(vm), values)
+			return call.This
+		})
+		proto.Set("sortbyvalue", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			name := valueString(call.Argument(0))
+			sortType := strings.ToLower(valueString(call.Argument(1)))
+			ascending := true
+			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Argument(2)) {
+				ascending = call.Argument(2).ToBoolean()
+			}
+			sort.SliceStable(values, func(i, j int) bool {
+				if sortType == "float" || sortType == "double" || sortType == "int" {
+					left := valueFloat(vm.ToValue(arrayMemberValue(values[i], name)))
+					right := valueFloat(vm.ToValue(arrayMemberValue(values[j], name)))
+					if ascending {
+						return left < right
+					}
+					return left > right
+				}
+				left := fmt.Sprint(arrayMemberValue(values[i], name))
+				right := fmt.Sprint(arrayMemberValue(values[j], name))
+				if ascending {
+					return left < right
+				}
+				return left > right
+			})
+			replaceArrayValues(vm, call.This.ToObject(vm), values)
+			return call.This
+		})
+		proto.Set("insertarray", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			insert := arrayValues(call.Argument(1))
+			index := int(valueInt(call.Argument(0)))
+			if index < 0 {
+				index = 0
+			}
+			if index > len(values) {
+				index = len(values)
+			}
+			values = append(values[:index], append(insert, values[index:]...)...)
+			replaceArrayValues(vm, call.This.ToObject(vm), values)
+			return call.This
+		})
+		proto.Set("subarray", func(call goja.FunctionCall) goja.Value {
+			values := arrayValues(call.This)
+			start := int(valueInt(call.Argument(0)))
+			if start < 0 {
+				start = 0
+			}
+			if start > len(values) {
+				start = len(values)
+			}
+			end := len(values)
+			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) {
+				length := int(valueInt(call.Argument(1)))
+				if length < 0 {
+					length = 0
+				}
+				end = start + length
+				if end > len(values) {
+					end = len(values)
+				}
+			}
+			return vm.ToValue(values[start:end])
+		})
 		proto.Set("savelines", func(call goja.FunctionCall) goja.Value {
 			err := saveVMLines(root, valueString(call.Argument(0)), valueLines(call.This), saveMode(call.Argument(1)))
 			return vm.ToValue(err == nil)
@@ -710,7 +1026,13 @@ func installFileFunctions(vm *goja.Runtime, root string) {
 		proto.Set("starts", func(call goja.FunctionCall) goja.Value {
 			return vm.ToValue(strings.HasPrefix(valueString(call.This), valueString(call.Argument(0))))
 		})
+		proto.Set("startswith", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.HasPrefix(valueString(call.This), valueString(call.Argument(0))))
+		})
 		proto.Set("ends", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.HasSuffix(valueString(call.This), valueString(call.Argument(0))))
+		})
+		proto.Set("endswith", func(call goja.FunctionCall) goja.Value {
 			return vm.ToValue(strings.HasSuffix(valueString(call.This), valueString(call.Argument(0))))
 		})
 		proto.Set("trim", func(call goja.FunctionCall) goja.Value {
@@ -917,6 +1239,59 @@ func valueLines(value goja.Value) []string {
 	default:
 		return []string{fmt.Sprint(typed)}
 	}
+}
+
+func arrayValues(value goja.Value) []any {
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return nil
+	}
+	exported := value.Export()
+	switch typed := exported.(type) {
+	case []any:
+		return append([]any(nil), typed...)
+	case []string:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return []any{typed}
+	}
+}
+
+func arrayMemberValue(value any, name string) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed[name]
+	default:
+		return ""
+	}
+}
+
+func newGS2Array(dims []int) []any {
+	if len(dims) == 0 {
+		return []any{}
+	}
+	out := make([]any, dims[0])
+	if len(dims) == 1 {
+		return out
+	}
+	for i := range out {
+		out[i] = newGS2Array(dims[1:])
+	}
+	return out
+}
+
+func replaceArrayValues(vm *goja.Runtime, obj *goja.Object, values []any) {
+	oldLen := int(valueInt(obj.Get("length")))
+	for i := 0; i < oldLen; i++ {
+		_ = obj.Delete(strconv.Itoa(i))
+	}
+	for i, value := range values {
+		obj.Set(strconv.Itoa(i), value)
+	}
+	obj.Set("length", len(values))
 }
 
 func valueStringLiteral(value string) string {
@@ -1155,10 +1530,22 @@ func objectFromPrefixedMap(vm *goja.Runtime, values map[string]string, prefix st
 func mapValue(value string) any {
 	if strings.Contains(value, ",") {
 		parts := strings.Split(value, ",")
+		out := make([]any, 0, len(parts))
 		for i := range parts {
-			parts[i] = strings.TrimSpace(parts[i])
+			out = append(out, typedGS2Value(parts[i]))
 		}
-		return parts
+		return out
+	}
+	return typedGS2Value(value)
+}
+
+func typedGS2Value(value string) any {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "true") {
+		return true
+	}
+	if strings.EqualFold(value, "false") {
+		return false
 	}
 	return value
 }
