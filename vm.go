@@ -140,19 +140,26 @@ type FileAction struct {
 }
 
 type NPCAction struct {
-	ID          uint32
-	ShapeType   int
-	Width       int
-	Height      int
-	TileTypes   []string
-	Chat        string
-	WarpLevel   string
-	WarpX       float64
-	WarpY       float64
-	MoveDX      float64
-	MoveDY      float64
-	MoveTime    float64
-	MoveOptions int
+	ID            uint32
+	ShapeType     int
+	Width         int
+	Height        int
+	TileTypes     []string
+	Chat          string
+	WarpLevel     string
+	WarpX         float64
+	WarpY         float64
+	MoveDX        float64
+	MoveDY        float64
+	MoveTime      float64
+	MoveOptions   int
+	Props         map[string]string
+	Flags         map[string]string
+	VisFlags      int
+	HasVisFlags   bool
+	BlockFlags    int
+	HasBlockFlags bool
+	Destroy       bool
 }
 
 type SocketAction struct {
@@ -250,6 +257,9 @@ func Run(config Config) Result {
 	currentPlayer := playerContextFromMap(config.Player, config.PlayerFlags)
 	currentPlayerObject := playerObject(vm, &result, currentPlayer, &players)
 	installNPCObjects(vm, &result, config.NPCs, &npcs)
+	if config.NPCID != 0 {
+		installCurrentNPCFunctions(vm, thisObj)
+	}
 	vm.Set("player", currentPlayerObject)
 	vm.Set("client", currentPlayerObject.Get("client"))
 	vm.Set("clientr", currentPlayerObject.Get("clientr"))
@@ -530,13 +540,106 @@ func Run(config Config) Result {
 	collectNPCFlags(&result, npcs)
 	collectServerFlagObject(&result, "server.", serverObj, serverFlags)
 	collectServerFlagObject(&result, "serverr.", serverrObj, serverrFlags)
-	if config.NPCID != 0 {
-		if chat := valueString(vm.Get("chat")); chat != "" {
-			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, Chat: chat})
-		}
-	}
+	collectCurrentNPCAction(vm, &result, thisObj, config.NPCID)
 	result.This = exportObject(thisObj)
 	return result
+}
+
+func installCurrentNPCFunctions(vm *goja.Runtime, thisObj *goja.Object) {
+	setBoolFlag := func(name string, value bool) { thisObj.Set("__npcflag_"+name, value) }
+	setVis := func(value int) { thisObj.Set("__hasvisflags", true); thisObj.Set("__visflags", value) }
+	setBlock := func(value int) { thisObj.Set("__hasblockflags", true); thisObj.Set("__blockflags", value) }
+	methods := map[string]func(goja.FunctionCall) goja.Value{
+		"hide":            func(call goja.FunctionCall) goja.Value { setVis(0); return goja.Undefined() },
+		"show":            func(call goja.FunctionCall) goja.Value { setVis(1); return goja.Undefined() },
+		"destroy":         func(call goja.FunctionCall) goja.Value { thisObj.Set("__destroy", true); return goja.Undefined() },
+		"dontblock":       func(call goja.FunctionCall) goja.Value { setBlock(1); return goja.Undefined() },
+		"blockagain":      func(call goja.FunctionCall) goja.Value { setBlock(0); return goja.Undefined() },
+		"drawoverplayer":  func(call goja.FunctionCall) goja.Value { setVis(3); return goja.Undefined() },
+		"drawunderplayer": func(call goja.FunctionCall) goja.Value { setVis(5); return goja.Undefined() },
+		"drawaslight":     func(call goja.FunctionCall) goja.Value { setBoolFlag("drawaslight", true); return goja.Undefined() },
+		"canbecarried":    func(call goja.FunctionCall) goja.Value { setBoolFlag("canbecarried", true); return goja.Undefined() },
+		"cannotbecarried": func(call goja.FunctionCall) goja.Value { setBoolFlag("canbecarried", false); return goja.Undefined() },
+		"canbepulled":     func(call goja.FunctionCall) goja.Value { setBoolFlag("canbepulled", true); return goja.Undefined() },
+		"cannotbepulled":  func(call goja.FunctionCall) goja.Value { setBoolFlag("canbepulled", false); return goja.Undefined() },
+		"canbepushed":     func(call goja.FunctionCall) goja.Value { setBoolFlag("canbepushed", true); return goja.Undefined() },
+		"cannotbepushed":  func(call goja.FunctionCall) goja.Value { setBoolFlag("canbepushed", false); return goja.Undefined() },
+		"canwarp":         func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp", true); return goja.Undefined() },
+		"canwarp2":        func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp2", true); return goja.Undefined() },
+		"cannotwarp": func(call goja.FunctionCall) goja.Value {
+			setBoolFlag("canwarp", false)
+			setBoolFlag("canwarp2", false)
+			return goja.Undefined()
+		},
+	}
+	for name, fn := range methods {
+		vm.Set(name, fn)
+		thisObj.Set(name, fn)
+	}
+}
+
+func collectCurrentNPCAction(vm *goja.Runtime, result *Result, thisObj *goja.Object, npcID uint32) {
+	if npcID == 0 {
+		return
+	}
+	propAliases := map[string]string{
+		"image": "image", "chat": "chat", "message": "chat", "dir": "dir", "ani": "ani", "gani": "ani",
+		"head": "head", "headimg": "head", "body": "body", "bodyimg": "body", "sword": "sword", "shield": "shield", "horseimg": "horse",
+		"hearts": "hearts", "gralats": "gralats", "arrows": "arrows", "bombs": "bombs", "darts": "arrows", "glovepower": "glovepower", "ap": "ap",
+	}
+	action := NPCAction{ID: npcID}
+	for name, canonical := range propAliases {
+		if value := currentNPCValue(vm.Get(name)); value != "" {
+			if action.Props == nil {
+				action.Props = make(map[string]string)
+			}
+			action.Props[canonical] = value
+		}
+		if thisObj != nil {
+			if value := currentNPCValue(thisObj.Get(name)); value != "" {
+				if action.Props == nil {
+					action.Props = make(map[string]string)
+				}
+				action.Props[canonical] = value
+			}
+		}
+	}
+	if action.Props != nil {
+		action.Chat = action.Props["chat"]
+	}
+	if thisObj != nil {
+		if currentNPCBool(thisObj.Get("__hasvisflags")) {
+			action.HasVisFlags = true
+			action.VisFlags = int(valueInt(thisObj.Get("__visflags")))
+		}
+		if currentNPCBool(thisObj.Get("__hasblockflags")) {
+			action.HasBlockFlags = true
+			action.BlockFlags = int(valueInt(thisObj.Get("__blockflags")))
+		}
+		action.Destroy = currentNPCBool(thisObj.Get("__destroy"))
+		for _, key := range thisObj.Keys() {
+			if strings.HasPrefix(key, "__npcflag_") {
+				if action.Flags == nil {
+					action.Flags = make(map[string]string)
+				}
+				action.Flags[strings.TrimPrefix(key, "__npcflag_")] = fmt.Sprint(thisObj.Get(key).Export())
+			}
+		}
+	}
+	if len(action.Props) > 0 || len(action.Flags) > 0 || action.HasVisFlags || action.HasBlockFlags || action.Destroy {
+		result.NPCActions = append(result.NPCActions, action)
+	}
+}
+
+func currentNPCValue(value goja.Value) string {
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return ""
+	}
+	return valueString(value)
+}
+
+func currentNPCBool(value goja.Value) bool {
+	return value != nil && !goja.IsUndefined(value) && !goja.IsNull(value) && value.ToBoolean()
 }
 
 func installCurrentSocketFunctions(vm *goja.Runtime, result *Result, socket *SocketContext) {

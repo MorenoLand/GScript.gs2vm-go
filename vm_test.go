@@ -308,6 +308,44 @@ func TestRunCollectsNPCActions(t *testing.T) {
 	}
 }
 
+func TestRunCollectsCurrentNPCPropertiesAndStateActions(t *testing.T) {
+	result := Run(Config{
+		NPCID:     25,
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			this.image = "block.png";
+			this.chat = "hi";
+			this.dir = 1;
+			this.head = "head1.png";
+			this.body = "body.png";
+			this.bombs = 4;
+			hide();
+			dontblock();
+			drawoverplayer();
+			canbecarried();
+			cannotbepushed();
+			destroy();
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCActions) != 1 {
+		t.Fatalf("Run NPCActions = %#v", result.NPCActions)
+	}
+	action := result.NPCActions[0]
+	if action.Props["image"] != "block.png" || action.Props["chat"] != "hi" || action.Props["dir"] != "1" || action.Props["head"] != "head1.png" || action.Props["body"] != "body.png" || action.Props["bombs"] != "4" {
+		t.Fatalf("action props = %#v", action.Props)
+	}
+	if !action.HasVisFlags || action.VisFlags != 3 || !action.HasBlockFlags || action.BlockFlags != 1 || !action.Destroy {
+		t.Fatalf("action state = %#v", action)
+	}
+	if action.Flags["canbecarried"] != "true" || action.Flags["canbepushed"] != "false" {
+		t.Fatalf("action flags = %#v", action.Flags)
+	}
+}
+
 func TestRunFindNPCObjectsAndCalls(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
