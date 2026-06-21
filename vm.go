@@ -204,7 +204,6 @@ type scriptNPCObject struct {
 var spcPattern = regexp.MustCompile(`(?i)\s+SPC\s+`)
 var tabPattern = regexp.MustCompile(`(?i)([\w\]\)"'])\s+TAB\s+([\w\[\("'])`)
 var nlPattern = regexp.MustCompile(`(?i)([\w\]\)"'])\s+NL\s+([\w\[\("'])`)
-var concatPattern = regexp.MustCompile(`\s+@\s+`)
 var dynamicPropertyPattern = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\.\s*\(([^()\n;]+)\)`)
 var stringNPCPropertyPattern = regexp.MustCompile(`(^|[^A-Za-z0-9_])\(\s*"([^"]+)"\s*\)\s*\.([A-Za-z_][A-Za-z0-9_]*)`)
 var tempLoadStringPattern = regexp.MustCompile(`\btemp\.([A-Za-z_][A-Za-z0-9_]*)\.loadstring\s*\(([^)]*)\)`)
@@ -674,6 +673,7 @@ func Translate(script string) string {
 	script = newTSocketPattern.ReplaceAllString(script, `__newTSocket(`)
 	script = translateEnums(script)
 	script = translateInArrays(script)
+	script = translateArrayLiterals(script)
 	script = arrayAssignPattern.ReplaceAllString(script, `= [$1]`)
 	script = arrayArgPattern.ReplaceAllString(script, `$1[$2]`)
 	script = translateNewArrays(script)
@@ -690,8 +690,98 @@ func Translate(script string) string {
 	script = tabPattern.ReplaceAllString(script, `$1 + "\t" + $2`)
 	script = nlPattern.ReplaceAllString(script, `$1 + "\n" + $2`)
 	script = strings.ReplaceAll(script, "@=", "+=")
-	script = concatPattern.ReplaceAllString(script, ` + `)
+	script = translateConcat(script)
 	return aliasTempAssignments(script)
+}
+
+func translateConcat(script string) string {
+	var out strings.Builder
+	quote := rune(0)
+	escaped := false
+	for _, r := range script {
+		if quote != 0 {
+			out.WriteRune(r)
+			if escaped {
+				escaped = false
+			} else if r == '\\' {
+				escaped = true
+			} else if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '"', '\'':
+			quote = r
+			out.WriteRune(r)
+		case '@':
+			out.WriteString(" + ")
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+func translateArrayLiterals(script string) string {
+	var out strings.Builder
+	for i := 0; i < len(script); i++ {
+		if script[i] != '=' {
+			out.WriteByte(script[i])
+			continue
+		}
+		out.WriteByte(script[i])
+		j := i + 1
+		for j < len(script) && (script[j] == ' ' || script[j] == '\t' || script[j] == '\r' || script[j] == '\n') {
+			out.WriteByte(script[j])
+			j++
+		}
+		if j >= len(script) || script[j] != '{' {
+			i = j - 1
+			continue
+		}
+		end := findMatchingBrace(script, j)
+		if end < 0 {
+			i = j - 1
+			continue
+		}
+		out.WriteByte('[')
+		out.WriteString(script[j+1 : end])
+		out.WriteByte(']')
+		i = end
+	}
+	return out.String()
+}
+
+func findMatchingBrace(script string, start int) int {
+	depth := 0
+	quote := byte(0)
+	escaped := false
+	for i := start; i < len(script); i++ {
+		c := script[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			quote = c
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func isPlayerLifecycleEvent(eventName string) bool {

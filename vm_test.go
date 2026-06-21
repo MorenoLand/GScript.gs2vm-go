@@ -61,6 +61,65 @@ func TestRunPlayerLifecycleEventPassesPlayerObjectArgument(t *testing.T) {
 	}
 }
 
+func TestRunSupportsControlNPCLoginScript(t *testing.T) {
+	script := `function onPlayerLogin(temp.pl) {
+  sendtonc(temp.pl.nick SPC "("@temp.pl.account@") "@(temp.pl.hasrightflag("warptoxy")? "(staff)":"")@": has logged online!");
+  if (temp.pl.hasrightflag("warptoxy")) {
+    temp.sw = {
+                "-Staff/Toolbar",
+                "-Staff/Level_Editor",
+                "-Staff/NPC_Editor",
+                "-Staff/Gani_Editor",
+                "-Staff/Link_Editor",
+                "-Staff/Console",
+                "-Staff/Gui_Explorer",
+                "-den/etiles"
+              };
+    for (temp.n: temp.sw) temp.pl.addWeapon(n);
+  }
+  temp.pl.addWeapon("-Core");
+  if (temp.pl.account.starts("pc:")) {
+    temp.pl.addWeapon("-ActivateClient");
+  }
+  temp.pl.join("player");
+  temp.pl.join("func_core");
+  this.fart = true;
+}
+
+function onPlayerLogout(temp.pl) {
+  sendtonc(temp.pl.nick SPC "("@temp.pl.account@"): has gone offline!");
+}
+
+function onCreated() {
+  for (temp.p: allplayers) {
+    if (temp.p.account == "Graal6973523") p.guild = "Manager";
+    if (temp.p.account == "Graal6973527") p.guild = "Waste of Space";
+  }
+}
+function getFile(_file) return base64encode(temp.mp.loadstring(findfiles(_file, true)[0]) ? mp : mp);
+
+function onRCChat(cmd, data) {
+echo(params);
+  temp._rt = cmd.pos("newrc") > -1? "RC3" : cmd.pos("sublimerc") > -1? (cmd.pos("grc") > -1? "SublimeRC (grc)" : "SublimeRC (py)") : nil;
+  if (_rt) printf("RC Detection: %s (%s)", _rt, data);
+  if(cmd == "file") player.sendtorc(format("file:%s:%s",getextension(data),getFile(data)));
+}`
+	result := Run(Config{
+		EventName: "onPlayerLogin",
+		Script:    script,
+		Player:    map[string]string{"account": "moondeath", "nick": "Moon", "rights": "warptoxy,NPC-Control"},
+	})
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NCMessages) != 1 || result.NCMessages[0] != "Moon (moondeath) (staff): has logged online!" {
+		t.Fatalf("NCMessages = %#v", result.NCMessages)
+	}
+	if !hasPlayerWeapon(result.PlayerWeapons, "moondeath", "-Core", true) || !hasPlayerWeapon(result.PlayerWeapons, "moondeath", "-Staff/Toolbar", true) {
+		t.Fatalf("PlayerWeapons = %#v", result.PlayerWeapons)
+	}
+}
+
 func TestRunExposesServerFlagsAndOptions(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
@@ -1206,6 +1265,15 @@ func TestRunRCChatHelpersAndRights(t *testing.T) {
 func hasPlayerFlag(flags []PlayerFlag, account, name, value string) bool {
 	for _, flag := range flags {
 		if flag.Account == account && flag.Name == name && flag.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPlayerWeapon(weapons []PlayerWeapon, account, name string, add bool) bool {
+	for _, weapon := range weapons {
+		if weapon.Account == account && weapon.Name == name && weapon.Add == add {
 			return true
 		}
 	}
