@@ -71,6 +71,7 @@ type PlayerContext struct {
 	Nick     string
 	Nickname string
 	Level    string
+	Dir      int
 	Flags    map[string]string
 	Rights   []string
 	Folders  []string
@@ -1674,7 +1675,15 @@ func exportObject(obj *goja.Object) map[string]any {
 
 func playerContextFromMap(values map[string]string, flags map[string]string) PlayerContext {
 	id, _ := strconv.ParseUint(values["id"], 10, 16)
-	return PlayerContext{ID: uint16(id), Account: values["account"], Nick: firstNonEmpty(values["nick"], values["nickname"]), Nickname: firstNonEmpty(values["nickname"], values["nick"]), Level: values["level"], Flags: flags, Rights: splitCSV(values["rights"]), Folders: splitLines(values["folders"])}
+	dir, _ := strconv.Atoi(strings.TrimSpace(values["dir"]))
+	return PlayerContext{ID: uint16(id), Account: values["account"], Nick: firstNonEmpty(values["nick"], values["nickname"]), Nickname: firstNonEmpty(values["nickname"], values["nick"]), Level: values["level"], Dir: normalizePlayerDir(dir), Flags: flags, Rights: splitCSV(values["rights"]), Folders: splitLines(values["folders"])}
+}
+
+func normalizePlayerDir(dir int) int {
+	if dir < 0 || dir > 3 {
+		return 2
+	}
+	return dir
 }
 
 func splitCSV(value string) []string {
@@ -1736,6 +1745,7 @@ func playerObject(vm *goja.Runtime, result *Result, player PlayerContext, player
 	obj.Set("nick", firstNonEmpty(player.Nick, player.Nickname))
 	obj.Set("nickname", firstNonEmpty(player.Nickname, player.Nick))
 	obj.Set("level", player.Level)
+	obj.Set("dir", normalizePlayerDir(player.Dir))
 	obj.Set("toString", func(call goja.FunctionCall) goja.Value { return vm.ToValue(player.Account) })
 	clientFlags := flagValues(player.Flags, "client.")
 	clientrFlags := flagValues(player.Flags, "clientr.")

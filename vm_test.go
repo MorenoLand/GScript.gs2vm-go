@@ -695,11 +695,13 @@ func TestRunExposesPlayerCollectionsAndHelpers(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
 		FileRoot:  root,
-		Players:   []PlayerContext{{ID: 7, Account: "Denveous"}, {ID: 8, Account: "bob"}},
+		Player:    map[string]string{"account": "self", "dir": "3"},
+		Players:   []PlayerContext{{ID: 7, Account: "Denveous", Dir: 1}, {ID: 8, Account: "bob", Dir: 2}},
 		Script: `function onCreated() {
 			for (temp.p: allplayers) if (p.account == "Denveous") echo(p.id);
 			echo(players[1].account);
 			echo(players[1].id);
+			echo(player.dir SPC players[0].dir SPC players[1].dir);
 			temp.encrypted = base64encode(des_encrypt("12345678", "Hello World"));
 			echo(des_decrypt("12345678", base64decode(temp.encrypted)));
 			savelog2("kek.txt", "hi");
@@ -711,7 +713,7 @@ func TestRunExposesPlayerCollectionsAndHelpers(t *testing.T) {
 	if result.Err != "" {
 		t.Fatalf("Run err = %q", result.Err)
 	}
-	want := []string{"7", "bob", "8", "Hello World", "true"}
+	want := []string{"7", "bob", "8", "3 1 2", "Hello World", "true"}
 	if len(result.Output) != len(want) {
 		t.Fatalf("Output = %#v", result.Output)
 	}
