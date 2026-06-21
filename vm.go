@@ -3,6 +3,8 @@ package gs2vm
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ type Config struct {
 	This          map[string]any
 	ServerFlags   map[string]string
 	ServerOptions map[string]string
+	FileRoot      string
 }
 
 type Result struct {
@@ -91,6 +94,7 @@ var concatPattern = regexp.MustCompile(`\s+@\s+`)
 var tempAssignPattern = regexp.MustCompile(`\btemp\.([A-Za-z_][A-Za-z0-9_]*)\s*=`)
 var enumPattern = regexp.MustCompile(`(?is)\benum\s*\{([^{}]*)\}`)
 var arrayAssignPattern = regexp.MustCompile(`=\s*\{([^{}\n;]*)\}`)
+var arrayArgPattern = regexp.MustCompile(`([,(]\s*)\{([^{}\n;]*)\}`)
 var newArrayPattern = regexp.MustCompile(`new\s*\[([^\]]*)\]`)
 var forKeywordPattern = regexp.MustCompile(`(?i)\bfor\s*\(`)
 var tempForPattern = regexp.MustCompile(`\bfor\s*\(\s*temp\.([A-Za-z_][A-Za-z0-9_]*)\s*=([^;]*);([^;]*);([^)]*)\)\s*\{`)
@@ -139,6 +143,7 @@ func Run(config Config) Result {
 	vm.Set("server", serverObj)
 	vm.Set("serverr", serverrObj)
 	vm.Set("serveroptions", objectFromMap(vm, config.ServerOptions))
+	installFileFunctions(vm, config.FileRoot)
 	vm.Set("echo", func(call goja.FunctionCall) goja.Value {
 		parts := make([]string, 0, len(call.Arguments))
 		for _, arg := range call.Arguments {
@@ -247,6 +252,7 @@ func StripClientside(script string) string {
 func Translate(script string) string {
 	script = translateEnums(script)
 	script = arrayAssignPattern.ReplaceAllString(script, `= [$1]`)
+	script = arrayArgPattern.ReplaceAllString(script, `$1[$2]`)
 	script = newArrayPattern.ReplaceAllString(script, `new Array($1)`)
 	script = forKeywordPattern.ReplaceAllString(script, `for (`)
 	script = translateForEachLoops(script)
@@ -316,6 +322,183 @@ func translateEnums(script string) string {
 		}
 		return out.String()
 	})
+}
+
+func installFileFunctions(vm *goja.Runtime, root string) {
+	vm.Set("loadstring", func(call goja.FunctionCall) goja.Value {
+		text, err := loadVMString(root, valueString(call.Argument(0)))
+		if err != nil {
+			return vm.ToValue("")
+		}
+		return vm.ToValue(text)
+	})
+	vm.Set("loadlines", func(call goja.FunctionCall) goja.Value {
+		lines, err := loadVMLines(root, valueString(call.Argument(0)))
+		if err != nil {
+			return vm.ToValue([]string{})
+		}
+		return vm.ToValue(lines)
+	})
+	vm.Set("savestring", func(call goja.FunctionCall) goja.Value {
+		err := saveVMString(root, valueString(call.Argument(0)), valueString(call.Argument(1)), saveMode(call.Argument(2)))
+		return vm.ToValue(err == nil)
+	})
+	vm.Set("savelines", func(call goja.FunctionCall) goja.Value {
+		err := saveVMLines(root, valueString(call.Argument(0)), valueLines(call.Argument(1)), saveMode(call.Argument(2)))
+		return vm.ToValue(err == nil)
+	})
+	if arrayCtor := vm.Get("Array"); arrayCtor != nil {
+		proto := arrayCtor.ToObject(vm).Get("prototype").ToObject(vm)
+		proto.Set("savelines", func(call goja.FunctionCall) goja.Value {
+			err := saveVMLines(root, valueString(call.Argument(0)), valueLines(call.This), saveMode(call.Argument(1)))
+			return vm.ToValue(err == nil)
+		})
+		proto.Set("loadlines", func(call goja.FunctionCall) goja.Value {
+			lines, err := loadVMLines(root, valueString(call.Argument(0)))
+			if err != nil {
+				lines = []string{}
+			}
+			obj := call.This.ToObject(vm)
+			obj.Set("length", 0)
+			for i, line := range lines {
+				obj.Set(strconv.Itoa(i), line)
+			}
+			return call.This
+		})
+	}
+	if stringCtor := vm.Get("String"); stringCtor != nil {
+		proto := stringCtor.ToObject(vm).Get("prototype").ToObject(vm)
+		proto.Set("savestring", func(call goja.FunctionCall) goja.Value {
+			err := saveVMString(root, valueString(call.Argument(0)), valueString(call.This), saveMode(call.Argument(1)))
+			return vm.ToValue(err == nil)
+		})
+		proto.Set("loadstring", func(call goja.FunctionCall) goja.Value {
+			text, err := loadVMString(root, valueString(call.Argument(0)))
+			if err != nil {
+				return vm.ToValue("")
+			}
+			return vm.ToValue(text)
+		})
+	}
+}
+
+func resolveVMFile(root, name string) (string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return "", fmt.Errorf("missing file root")
+	}
+	clean := filepath.Clean(strings.ReplaceAll(valueStringLiteral(name), "\\", "/"))
+	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || strings.Contains(clean, string([]byte{0})) {
+		return "", fmt.Errorf("invalid path")
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	full := filepath.Join(rootAbs, clean)
+	rel, err := filepath.Rel(rootAbs, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes root")
+	}
+	return full, nil
+}
+
+func loadVMString(root, name string) (string, error) {
+	path, err := resolveVMFile(root, name)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func loadVMLines(root, name string) ([]string, error) {
+	text, err := loadVMString(root, name)
+	if err != nil {
+		return nil, err
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.TrimSuffix(text, "\n")
+	if text == "" {
+		return []string{}, nil
+	}
+	return strings.Split(text, "\n"), nil
+}
+
+func saveVMString(root, name, text string, appendMode bool) error {
+	path, err := resolveVMFile(root, name)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	flag := os.O_CREATE | os.O_WRONLY
+	if appendMode {
+		flag |= os.O_APPEND
+	} else {
+		flag |= os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, flag, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(text)
+	return err
+}
+
+func saveVMLines(root, name string, lines []string, appendMode bool) error {
+	text := strings.Join(lines, "\n")
+	if len(lines) > 0 {
+		text += "\n"
+	}
+	return saveVMString(root, name, text, appendMode)
+}
+
+func saveMode(value goja.Value) bool {
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return false
+	}
+	switch typed := value.Export().(type) {
+	case bool:
+		return typed
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case float64:
+		return typed != 0
+	case string:
+		return typed == "1" || strings.EqualFold(typed, "true") || strings.EqualFold(typed, "append")
+	}
+	return false
+}
+
+func valueLines(value goja.Value) []string {
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return []string{}
+	}
+	exported := value.Export()
+	switch typed := exported.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		lines := make([]string, 0, len(typed))
+		for _, line := range typed {
+			lines = append(lines, fmt.Sprint(line))
+		}
+		return lines
+	default:
+		return []string{fmt.Sprint(typed)}
+	}
+}
+
+func valueStringLiteral(value string) string {
+	return strings.TrimSpace(strings.ReplaceAll(value, "\x00", ""))
 }
 
 func aliasTempAssignments(script string) string {

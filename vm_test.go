@@ -1,6 +1,10 @@
 package gs2vm
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestRunEchoesParamsAndPlayerAccount(t *testing.T) {
 	result := Run(Config{
@@ -350,6 +354,51 @@ func TestRunTranslatesForEachLoops(t *testing.T) {
 	}
 }
 
+func TestRunSupportsStringAndLineFileGlobals(t *testing.T) {
+	root := testFileRoot(t)
+	result := Run(Config{
+		EventName: "onCreated",
+		FileRoot:  root,
+		Script: `function onCreated() {
+			savestring("data/text.txt", "hello", 0);
+			savestring("data/text.txt", " world", 1);
+			savelines("data/lines.txt", {"one", "two"}, 0);
+			temp.loaded = loadlines("data/lines.txt");
+			echo(loadstring("data/text.txt") SPC temp.loaded[0] SPC temp.loaded[1]);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "hello world one two" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsStringAndLineFileMethods(t *testing.T) {
+	root := testFileRoot(t)
+	result := Run(Config{
+		EventName: "onCreated",
+		FileRoot:  root,
+		Script: `function onCreated() {
+			"hello".savestring("method/text.txt", 0);
+			temp.lines = {"alpha", "beta"};
+			temp.lines.savelines("method/lines.txt", 0);
+			temp.loaded = {};
+			temp.loaded.loadlines("method/lines.txt");
+			echo(loadstring("method/text.txt") SPC temp.loaded[0] SPC temp.loaded[1]);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "hello alpha beta" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
 func TestRunPersistsThisButNotTempThroughHostState(t *testing.T) {
 	first := Run(Config{
 		EventName: "onCreated",
@@ -383,4 +432,22 @@ func hasPlayerFlag(flags []PlayerFlag, account, name, value string) bool {
 		}
 	}
 	return false
+}
+
+func testFileRoot(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp(".", ".test-gs2-files-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Fatalf("cleanup %s: %v", root, err)
+		}
+	})
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
 }
