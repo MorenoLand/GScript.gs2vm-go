@@ -28,6 +28,7 @@ type Result struct {
 	ClientTriggers []ClientTrigger
 	PlayerFlags    []PlayerFlag
 	PlayerMessages []PlayerMessage
+	PlayerWeapons  []PlayerWeapon
 	PlayerWarps    []PlayerWarp
 	This           map[string]any
 	Err            string
@@ -56,6 +57,12 @@ type PlayerFlag struct {
 type PlayerMessage struct {
 	Account string
 	Message string
+}
+
+type PlayerWeapon struct {
+	Account string
+	Name    string
+	Add     bool
 }
 
 type PlayerWarp struct {
@@ -106,6 +113,14 @@ func Run(config Config) Result {
 	})
 	vm.Set("setlevel2", func(call goja.FunctionCall) goja.Value {
 		addPlayerWarp(&result, currentPlayer.Account, valueString(call.Argument(0)), valueFloat(call.Argument(1)), valueFloat(call.Argument(2)))
+		return goja.Undefined()
+	})
+	vm.Set("addweapon", func(call goja.FunctionCall) goja.Value {
+		addPlayerWeapon(&result, currentPlayer.Account, valueString(call.Argument(0)), true)
+		return goja.Undefined()
+	})
+	vm.Set("removeweapon", func(call goja.FunctionCall) goja.Value {
+		addPlayerWeapon(&result, currentPlayer.Account, valueString(call.Argument(0)), false)
 		return goja.Undefined()
 	})
 	vm.Set("server", objectFromPrefixedMap(vm, config.ServerFlags, "server."))
@@ -354,8 +369,23 @@ func playerObject(vm *goja.Runtime, result *Result, player PlayerContext, player
 		addPlayerWarp(result, player.Account, valueString(call.Argument(0)), valueFloat(call.Argument(1)), valueFloat(call.Argument(2)))
 		return goja.Undefined()
 	})
+	obj.Set("addweapon", func(call goja.FunctionCall) goja.Value {
+		addPlayerWeapon(result, player.Account, valueString(call.Argument(0)), true)
+		return goja.Undefined()
+	})
+	obj.Set("removeweapon", func(call goja.FunctionCall) goja.Value {
+		addPlayerWeapon(result, player.Account, valueString(call.Argument(0)), false)
+		return goja.Undefined()
+	})
 	*players = append(*players, scriptPlayerObject{account: player.Account, client: client, clientr: clientr, initialClient: clientFlags, initialClientr: clientrFlags})
 	return obj
+}
+
+func addPlayerWeapon(result *Result, account, name string, add bool) {
+	if result == nil || account == "" || strings.TrimSpace(name) == "" {
+		return
+	}
+	result.PlayerWeapons = append(result.PlayerWeapons, PlayerWeapon{Account: account, Name: strings.TrimSpace(name), Add: add})
 }
 
 func addPlayerWarp(result *Result, account, level string, x, y float64) {

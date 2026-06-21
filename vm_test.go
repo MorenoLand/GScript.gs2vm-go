@@ -212,6 +212,33 @@ func TestRunCollectsPlayerSetLevelActions(t *testing.T) {
 	}
 }
 
+func TestRunCollectsPlayerWeaponActions(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Player:    map[string]string{"account": "moondeath"},
+		Players:   []PlayerContext{{Account: "bob"}},
+		Script: `function onCreated() {
+			addweapon("-self");
+			removeweapon("-old");
+			findplayer("bob").addweapon("-bob");
+			findplayer("bob").removeweapon("-gone");
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.PlayerWeapons) != 4 {
+		t.Fatalf("PlayerWeapons = %#v", result.PlayerWeapons)
+	}
+	want := []PlayerWeapon{{Account: "moondeath", Name: "-self", Add: true}, {Account: "moondeath", Name: "-old"}, {Account: "bob", Name: "-bob", Add: true}, {Account: "bob", Name: "-gone"}}
+	for i := range want {
+		if result.PlayerWeapons[i] != want[i] {
+			t.Fatalf("PlayerWeapons[%d] = %#v want %#v", i, result.PlayerWeapons[i], want[i])
+		}
+	}
+}
+
 func TestRunTranslatesGS2ConcatenatorsEnumsAndArrays(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",
