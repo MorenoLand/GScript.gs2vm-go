@@ -1102,6 +1102,60 @@ func TestRunPersistsThisButNotTempThroughHostState(t *testing.T) {
 	}
 }
 
+func TestRunRCChatHelpersAndRights(t *testing.T) {
+	root := testFileRoot(t)
+	if err := os.WriteFile(filepath.Join(root, "script.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result := Run(Config{
+		EventName: "onRCChat",
+		FileRoot:  root,
+		FileRights: []string{
+			"r script.txt",
+		},
+		Player: map[string]string{
+			"account": "moondeath",
+			"nick":    "Moon",
+			"rights":  "warptoxy,NPC-Control",
+			"folders": "r script.txt",
+		},
+		Script: `function getFile(file) return base64encode(temp.mp.loadstring(findfiles(file, true)[0]) ? mp : mp);
+			function onRCChat(cmd, data) {
+				if (cmd == "newrc" && player.hasrightflag("warptoxy")) sendtonc(format("RC Detection: %s (%s)", "RC3", data));
+				if (cmd == "file") player.sendtorc(format("file:%s:%s", getextension(data), getFile(data)));
+			}`,
+		Params: []string{"newrc", "2015.10.31"},
+	})
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NCMessages) != 1 || result.NCMessages[0] != "RC Detection: RC3 (2015.10.31)" {
+		t.Fatalf("NCMessages = %#v", result.NCMessages)
+	}
+	result = Run(Config{
+		EventName: "onRCChat",
+		FileRoot:  root,
+		FileRights: []string{
+			"r script.txt",
+		},
+		Player: map[string]string{
+			"account": "moondeath",
+			"folders": "r script.txt",
+		},
+		Script: `function getFile(file) return base64encode(temp.mp.loadstring(findfiles(file, true)[0]) ? mp : mp);
+			function onRCChat(cmd, data) {
+				if (cmd == "file") player.sendtorc(format("file:%s:%s", getextension(data), getFile(data)));
+			}`,
+		Params: []string{"file", "script.txt"},
+	})
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.PlayerRCMessages) != 1 || result.PlayerRCMessages[0].Account != "moondeath" || result.PlayerRCMessages[0].Message != "file:txt:aGVsbG8=" {
+		t.Fatalf("PlayerRCMessages = %#v", result.PlayerRCMessages)
+	}
+}
+
 func hasPlayerFlag(flags []PlayerFlag, account, name, value string) bool {
 	for _, flag := range flags {
 		if flag.Account == account && flag.Name == name && flag.Value == value {
