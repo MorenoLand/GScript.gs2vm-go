@@ -354,6 +354,28 @@ func TestRunTranslatesForEachLoops(t *testing.T) {
 	}
 }
 
+func TestRunTranslatesDynamicFunctionCalls(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.foo = "bar";
+			(@foo)();
+			(@foo)("again");
+		}
+		function bar(value) {
+			if (value == null) value = "called";
+			echo(value);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 2 || result.Output[0] != "called" || result.Output[1] != "again" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
 func TestRunSupportsStringAndLineFileGlobals(t *testing.T) {
 	root := testFileRoot(t)
 	result := Run(Config{

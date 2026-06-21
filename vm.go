@@ -96,6 +96,7 @@ var enumPattern = regexp.MustCompile(`(?is)\benum\s*\{([^{}]*)\}`)
 var arrayAssignPattern = regexp.MustCompile(`=\s*\{([^{}\n;]*)\}`)
 var arrayArgPattern = regexp.MustCompile(`([,(]\s*)\{([^{}\n;]*)\}`)
 var newArrayPattern = regexp.MustCompile(`new\s*\[([^\]]*)\]`)
+var dynamicCallPattern = regexp.MustCompile(`\(\s*@\s*([^)]+?)\s*\)\s*\(([^()]*)\)`)
 var forKeywordPattern = regexp.MustCompile(`(?i)\bfor\s*\(`)
 var tempForPattern = regexp.MustCompile(`\bfor\s*\(\s*temp\.([A-Za-z_][A-Za-z0-9_]*)\s*=([^;]*);([^;]*);([^)]*)\)\s*\{`)
 var forEachPattern = regexp.MustCompile(`\bfor\s*\(\s*(temp\.)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::|\bin\b)\s*([^)]+)\)\s*\{`)
@@ -144,6 +145,25 @@ func Run(config Config) Result {
 	vm.Set("serverr", serverrObj)
 	vm.Set("serveroptions", objectFromMap(vm, config.ServerOptions))
 	installFileFunctions(vm, config.FileRoot)
+	vm.Set("__callDynamic", func(call goja.FunctionCall) goja.Value {
+		name := strings.TrimSpace(valueString(call.Argument(0)))
+		if name == "" {
+			return goja.Undefined()
+		}
+		fn, ok := goja.AssertFunction(vm.Get(name))
+		if !ok {
+			return goja.Undefined()
+		}
+		args := make([]goja.Value, 0, len(call.Arguments)-1)
+		for _, arg := range call.Arguments[1:] {
+			args = append(args, arg)
+		}
+		value, err := fn(goja.Undefined(), args...)
+		if err != nil {
+			panic(err)
+		}
+		return value
+	})
 	vm.Set("echo", func(call goja.FunctionCall) goja.Value {
 		parts := make([]string, 0, len(call.Arguments))
 		for _, arg := range call.Arguments {
@@ -254,6 +274,7 @@ func Translate(script string) string {
 	script = arrayAssignPattern.ReplaceAllString(script, `= [$1]`)
 	script = arrayArgPattern.ReplaceAllString(script, `$1[$2]`)
 	script = newArrayPattern.ReplaceAllString(script, `new Array($1)`)
+	script = translateDynamicCalls(script)
 	script = forKeywordPattern.ReplaceAllString(script, `for (`)
 	script = translateForEachLoops(script)
 	script = translateTempForLoops(script)
@@ -262,6 +283,21 @@ func Translate(script string) string {
 	script = strings.ReplaceAll(script, "@=", "+=")
 	script = concatPattern.ReplaceAllString(script, ` + `)
 	return aliasTempAssignments(script)
+}
+
+func translateDynamicCalls(script string) string {
+	return dynamicCallPattern.ReplaceAllStringFunc(script, func(call string) string {
+		match := dynamicCallPattern.FindStringSubmatch(call)
+		if len(match) != 3 {
+			return call
+		}
+		target := strings.TrimSpace(match[1])
+		args := strings.TrimSpace(match[2])
+		if args == "" {
+			return "__callDynamic(" + target + ")"
+		}
+		return "__callDynamic(" + target + ", " + args + ")"
+	})
 }
 
 func translateForEachLoops(script string) string {
