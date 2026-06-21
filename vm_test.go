@@ -100,6 +100,197 @@ func TestRunCollectsTriggerClient(t *testing.T) {
 	}
 }
 
+func TestRunCollectsTSocketActions(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			this.socket = new TSocket("HTTPSocket");
+			this.socket.packagedelimiter = "\n" @ char(13) @ "\n";
+			this.socket.bind(1234, false);
+			this.socket.send("hello");
+			this.socket.close();
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.SocketActions) != 3 {
+		t.Fatalf("Run SocketActions = %#v", result.SocketActions)
+	}
+	if result.SocketActions[0].Action != "bind" || result.SocketActions[0].Name != "HTTPSocket" || result.SocketActions[0].Port != 1234 || result.SocketActions[0].PackageDelimiter != "\n\r\n" {
+		t.Fatalf("bind action = %#v", result.SocketActions[0])
+	}
+	if result.SocketActions[1].Action != "send" || result.SocketActions[1].Data != "hello" {
+		t.Fatalf("send action = %#v", result.SocketActions[1])
+	}
+	if result.SocketActions[2].Action != "close" {
+		t.Fatalf("close action = %#v", result.SocketActions[2])
+	}
+}
+
+func TestRunSupportsDottedSocketEvents(t *testing.T) {
+	result := Run(Config{
+		EventName: "HTTPSocket.onBind",
+		Script: `function HTTPSocket.onBind() {
+			echo(this.name @ " bound");
+		}`,
+		This: map[string]any{"name": "HTTPSocket"},
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "HTTPSocket bound" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsTempParameterFunctions(t *testing.T) {
+	result := Run(Config{
+		EventName: "onReceiveDataPackage",
+		Params:    []string{"GET / HTTP/1.1"},
+		Script: `function onReceiveDataPackage(temp.str) {
+			echo(temp.str);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "GET / HTTP/1.1" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunCollectsScheduledEvents(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			this.scheduleevent(1, "onBindSockets");
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.ScheduledEvents) != 1 || result.ScheduledEvents[0].Event != "onBindSockets" || result.ScheduledEvents[0].Delay != 1 {
+		t.Fatalf("Run ScheduledEvents = %#v", result.ScheduledEvents)
+	}
+}
+
+func TestRunSupportsCamelCaseScheduleEventAndBareEventNames(t *testing.T) {
+	script := `function onCreated() {
+			scheduleEvent(1, "Kek");
+			this.scheduleEvent(2, "onOther");
+		}
+		function onKek() { echo("foo"); }
+		function onOther() { echo("bar"); }`
+	result := Run(Config{
+		EventName: "onCreated",
+		Script:    script,
+	})
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.ScheduledEvents) != 2 || result.ScheduledEvents[0].Event != "Kek" || result.ScheduledEvents[1].Event != "onOther" {
+		t.Fatalf("Run ScheduledEvents = %#v", result.ScheduledEvents)
+	}
+	next := Run(Config{EventName: result.ScheduledEvents[0].Event, Script: script})
+	if next.Err != "" {
+		t.Fatalf("next Run err = %q", next.Err)
+	}
+	if len(next.Output) != 1 || next.Output[0] != "foo" {
+		t.Fatalf("next output = %#v", next.Output)
+	}
+}
+
+func TestRunCollectsNPCActions(t *testing.T) {
+	result := Run(Config{
+		NPCID:     25,
+		EventName: "onActionBob",
+		Params:    []string{"kek"},
+		Script: `function onActionBob(prm1) {
+			setshape(1, 32, 48);
+			chat = "Bob param" SPC prm1 SPC params[0];
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCActions) != 2 {
+		t.Fatalf("Run NPCActions = %#v", result.NPCActions)
+	}
+	if result.NPCActions[0].ID != 25 || result.NPCActions[0].ShapeType != 1 || result.NPCActions[0].Width != 32 || result.NPCActions[0].Height != 48 {
+		t.Fatalf("shape action = %#v", result.NPCActions[0])
+	}
+	if result.NPCActions[1].Chat != "Bob param kek kek" {
+		t.Fatalf("chat action = %#v", result.NPCActions[1])
+	}
+}
+
+func TestRunSupportsMoreParityHelpers(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.word = "abcdef";
+			echo(temp.word.substring(2, 3) SPC ("b" in {"a", "b", "c"}) SPC "  Hi ".trim().lower() SPC strlen("abcd"));
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "cde true hi 4" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunSupportsTabAndNLConcatenators(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			echo("a" TAB "b");
+			echo("c" NL "d");
+			echo(TAB @ NL);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 3 || result.Output[0] != "a\tb" || result.Output[1] != "c\nd" || result.Output[2] != "\t\n" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunExposesPlayersWeaponsAndNPCWarp(t *testing.T) {
+	result := Run(Config{
+		NPCID:     25,
+		EventName: "onCreated",
+		Players: []PlayerContext{
+			{Account: "moondeath", Nick: "*moondeath"},
+			{Account: "guest", Nick: "guest"},
+		},
+		Weapons: []WeaponContext{{Name: "-gr_movement", Image: "wbomb1.png"}},
+		Script: `function onCreated() {
+			echo(allplayers.length SPC allplayers[0].account SPC weapons[0].name);
+			warpto("test.nw", 30, 31);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "2 moondeath -gr_movement" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	if len(result.NPCActions) != 1 || result.NPCActions[0].WarpLevel != "test.nw" || result.NPCActions[0].WarpX != 30 || result.NPCActions[0].WarpY != 31 {
+		t.Fatalf("Run NPCActions = %#v", result.NPCActions)
+	}
+}
+
 func TestRunBase64AndScreenGlobals(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",

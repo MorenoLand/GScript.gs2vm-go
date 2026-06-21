@@ -2,7 +2,9 @@ package gs2vm
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,22 +22,29 @@ type Config struct {
 	Player        map[string]string
 	PlayerFlags   map[string]string
 	Players       []PlayerContext
+	Weapons       []WeaponContext
+	NPCID         uint32
 	This          map[string]any
 	ServerFlags   map[string]string
 	ServerOptions map[string]string
 	FileRoot      string
+	Socket        *SocketContext
 }
 
 type Result struct {
-	Output         []string
-	ClientTriggers []ClientTrigger
-	PlayerFlags    []PlayerFlag
-	ServerFlags    []ServerFlag
-	PlayerMessages []PlayerMessage
-	PlayerWeapons  []PlayerWeapon
-	PlayerWarps    []PlayerWarp
-	This           map[string]any
-	Err            string
+	Output          []string
+	ClientTriggers  []ClientTrigger
+	PlayerFlags     []PlayerFlag
+	ServerFlags     []ServerFlag
+	PlayerMessages  []PlayerMessage
+	PlayerWeapons   []PlayerWeapon
+	PlayerWarps     []PlayerWarp
+	NPCActions      []NPCAction
+	SocketActions   []SocketAction
+	SocketUpdates   []SocketContext
+	ScheduledEvents []ScheduledEvent
+	This            map[string]any
+	Err             string
 }
 
 type ClientTrigger struct {
@@ -50,6 +59,11 @@ type PlayerContext struct {
 	Nickname string
 	Level    string
 	Flags    map[string]string
+}
+
+type WeaponContext struct {
+	Name  string
+	Image string
 }
 
 type PlayerFlag struct {
@@ -82,6 +96,42 @@ type PlayerWarp struct {
 	Y       float64
 }
 
+type NPCAction struct {
+	ID        uint32
+	ShapeType int
+	Width     int
+	Height    int
+	TileTypes []string
+	Chat      string
+	WarpLevel string
+	WarpX     float64
+	WarpY     float64
+}
+
+type SocketAction struct {
+	Action           string
+	Name             string
+	ID               string
+	Port             int
+	Data             string
+	PackageDelimiter string
+}
+
+type ScheduledEvent struct {
+	Event string
+	Delay float64
+}
+
+type SocketContext struct {
+	Name             string
+	ID               string
+	IPAddress        string
+	Port             int
+	PackageDelimiter string
+	Data             string
+	IsConnected      bool
+}
+
 type scriptPlayerObject struct {
 	account        string
 	client         *goja.Object
@@ -91,16 +141,23 @@ type scriptPlayerObject struct {
 }
 
 var spcPattern = regexp.MustCompile(`(?i)\s+SPC\s+`)
+var tabPattern = regexp.MustCompile(`(?i)([\w\]\)"'])\s+TAB\s+([\w\[\("'])`)
+var nlPattern = regexp.MustCompile(`(?i)([\w\]\)"'])\s+NL\s+([\w\[\("'])`)
 var concatPattern = regexp.MustCompile(`\s+@\s+`)
 var tempAssignPattern = regexp.MustCompile(`\btemp\.([A-Za-z_][A-Za-z0-9_]*)\s*=`)
 var enumPattern = regexp.MustCompile(`(?is)\benum\s*\{([^{}]*)\}`)
 var arrayAssignPattern = regexp.MustCompile(`=\s*\{([^{}\n;]*)\}`)
 var arrayArgPattern = regexp.MustCompile(`([,(]\s*)\{([^{}\n;]*)\}`)
 var newArrayPattern = regexp.MustCompile(`new\s*\[([^\]]*)\]`)
+var inArrayPattern = regexp.MustCompile(`(?i)([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\d+(?:\.\d+)?)\s+in\s+\{([^{}\n;]*)\}`)
 var dynamicCallPattern = regexp.MustCompile(`\(\s*@\s*([^)]+?)\s*\)\s*\(([^()]*)\)`)
 var forKeywordPattern = regexp.MustCompile(`(?i)\bfor\s*\(`)
 var tempForPattern = regexp.MustCompile(`\bfor\s*\(\s*temp\.([A-Za-z_][A-Za-z0-9_]*)\s*=([^;]*);([^;]*);([^)]*)\)\s*\{`)
 var forEachPattern = regexp.MustCompile(`\bfor\s*\(\s*(temp\.)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::|\bin\b)\s*([^)]+)\)\s*\{`)
+var dottedTempParamFunctionPattern = regexp.MustCompile(`\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*temp\.([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\{`)
+var dottedFunctionPattern = regexp.MustCompile(`\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+var tempParamFunctionPattern = regexp.MustCompile(`\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*temp\.[^)]*)\)\s*\{`)
+var newTSocketPattern = regexp.MustCompile(`\bnew\s+TSocket\s*\(`)
 
 func Run(config Config) Result {
 	vm := goja.New()
@@ -112,9 +169,12 @@ func Run(config Config) Result {
 
 	vm.Set("name", config.ScriptName)
 	vm.Set("params", append([]string(nil), config.Params...))
+	vm.Set("allplayers", playerListObject(vm, &result, config.Players, &players))
+	vm.Set("weapons", weaponListObject(vm, config.Weapons))
 	vm.Set("temp", vm.NewObject())
 	vm.Set("TAB", "\t")
 	vm.Set("NL", "\n")
+	vm.Set("NULL", goja.Null())
 	vm.Set("screenwidth", 1024)
 	vm.Set("screenheight", 1024)
 	currentPlayer := playerContextFromMap(config.Player, config.PlayerFlags)
@@ -122,6 +182,7 @@ func Run(config Config) Result {
 	vm.Set("player", currentPlayerObject)
 	vm.Set("client", currentPlayerObject.Get("client"))
 	vm.Set("clientr", currentPlayerObject.Get("clientr"))
+	vm.Set("chat", "")
 	serverFlags := flagValues(config.ServerFlags, "server.")
 	serverrFlags := flagValues(config.ServerFlags, "serverr.")
 	serverObj := flagObject(vm, serverFlags)
@@ -142,10 +203,33 @@ func Run(config Config) Result {
 		addPlayerWeapon(&result, currentPlayer.Account, valueString(call.Argument(0)), false)
 		return goja.Undefined()
 	})
+	vm.Set("setshape", func(call goja.FunctionCall) goja.Value {
+		if config.NPCID != 0 {
+			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, ShapeType: int(valueInt(call.Argument(0))), Width: int(valueInt(call.Argument(1))), Height: int(valueInt(call.Argument(2)))})
+		}
+		return goja.Undefined()
+	})
+	vm.Set("setshape2", func(call goja.FunctionCall) goja.Value {
+		if config.NPCID != 0 {
+			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, ShapeType: 2, Width: int(valueInt(call.Argument(0))), Height: int(valueInt(call.Argument(1))), TileTypes: valueLines(call.Argument(2))})
+		}
+		return goja.Undefined()
+	})
+	vm.Set("warpto", func(call goja.FunctionCall) goja.Value {
+		if config.NPCID != 0 {
+			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, WarpLevel: valueString(call.Argument(0)), WarpX: valueFloat(call.Argument(1)), WarpY: valueFloat(call.Argument(2))})
+		}
+		return goja.Undefined()
+	})
 	vm.Set("server", serverObj)
 	vm.Set("serverr", serverrObj)
 	vm.Set("serveroptions", objectFromMap(vm, config.ServerOptions))
 	installFileFunctions(vm, config.FileRoot)
+	installScriptUtilityFunctions(vm, &result, thisObj)
+	installSocketFunctions(vm, &result)
+	if config.Socket != nil {
+		installCurrentSocketFunctions(vm, &result, config.Socket)
+	}
 	vm.Set("__callDynamic", func(call goja.FunctionCall) goja.Value {
 		name := strings.TrimSpace(valueString(call.Argument(0)))
 		if name == "" {
@@ -164,6 +248,15 @@ func Run(config Config) Result {
 			panic(err)
 		}
 		return value
+	})
+	vm.Set("__gs2In", func(call goja.FunctionCall) goja.Value {
+		needle := valueString(call.Argument(0))
+		for _, candidate := range valueLines(call.Argument(1)) {
+			if valueStringLiteral(candidate) == needle {
+				return vm.ToValue(true)
+			}
+		}
+		return vm.ToValue(false)
 	})
 	vm.Set("echo", func(call goja.FunctionCall) goja.Value {
 		parts := make([]string, 0, len(call.Arguments))
@@ -250,14 +343,44 @@ func Run(config Config) Result {
 	if !ok {
 		return result
 	}
-	if _, err := fn(thisObj); err != nil {
+	args := make([]goja.Value, 0, len(config.Params)+1)
+	for _, param := range config.Params {
+		args = append(args, vm.ToValue(param))
+	}
+	var socketObj *goja.Object
+	if config.Socket != nil && len(args) == 0 {
+		socketObj = newSocketObject(vm, &result, config.Socket.Name, config.Socket.ID, config.Socket)
+		args = append(args, socketObj)
+	}
+	if _, err := fn(thisObj, args...); err != nil {
 		result.Err = err.Error()
+	}
+	if config.Socket != nil && socketObj != nil {
+		result.SocketUpdates = append(result.SocketUpdates, SocketContext{Name: config.Socket.Name, ID: config.Socket.ID, IPAddress: valueString(socketObj.Get("ipaddress")), Port: int(valueInt(socketObj.Get("port"))), PackageDelimiter: valueString(socketObj.Get("packagedelimiter")), Data: valueString(socketObj.Get("data")), IsConnected: !goja.IsNull(socketObj.Get("isconnected")) && !goja.IsUndefined(socketObj.Get("isconnected")) && socketObj.Get("isconnected").ToBoolean()})
 	}
 	collectPlayerFlags(vm, &result, players)
 	collectServerFlagObject(&result, "server.", serverObj, serverFlags)
 	collectServerFlagObject(&result, "serverr.", serverrObj, serverrFlags)
+	if config.NPCID != 0 {
+		if chat := valueString(vm.Get("chat")); chat != "" {
+			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, Chat: chat})
+		}
+	}
 	result.This = exportObject(thisObj)
 	return result
+}
+
+func installCurrentSocketFunctions(vm *goja.Runtime, result *Result, socket *SocketContext) {
+	vm.Set("outdatalength", 0)
+	vm.Set("isconnected", socket.IsConnected)
+	vm.Set("send", func(call goja.FunctionCall) goja.Value {
+		result.SocketActions = append(result.SocketActions, SocketAction{Action: "send", Name: socket.Name, ID: socket.ID, Data: valueString(call.Argument(0))})
+		return goja.Undefined()
+	})
+	vm.Set("close", func(call goja.FunctionCall) goja.Value {
+		result.SocketActions = append(result.SocketActions, SocketAction{Action: "close", Name: socket.Name, ID: socket.ID})
+		return goja.Undefined()
+	})
 }
 
 func StripClientside(script string) string {
@@ -271,7 +394,13 @@ func StripClientside(script string) string {
 }
 
 func Translate(script string) string {
+	script = regexp.MustCompile(`(?i)\bpublic\s+function\b`).ReplaceAllString(script, `function`)
+	script = dottedTempParamFunctionPattern.ReplaceAllString(script, `function ${1}_${2}(${3}) { temp.${3} = ${3};`)
+	script = dottedFunctionPattern.ReplaceAllString(script, `function ${1}_${2}(`)
+	script = translateTempParams(script)
+	script = newTSocketPattern.ReplaceAllString(script, `__newTSocket(`)
 	script = translateEnums(script)
+	script = translateInArrays(script)
 	script = arrayAssignPattern.ReplaceAllString(script, `= [$1]`)
 	script = arrayArgPattern.ReplaceAllString(script, `$1[$2]`)
 	script = newArrayPattern.ReplaceAllString(script, `new Array($1)`)
@@ -281,9 +410,144 @@ func Translate(script string) string {
 	script = translateTempForLoops(script)
 	script = strings.ReplaceAll(script, ".size()", ".length")
 	script = spcPattern.ReplaceAllString(script, ` + " " + `)
+	script = tabPattern.ReplaceAllString(script, `$1 + "\t" + $2`)
+	script = nlPattern.ReplaceAllString(script, `$1 + "\n" + $2`)
 	script = strings.ReplaceAll(script, "@=", "+=")
 	script = concatPattern.ReplaceAllString(script, ` + `)
 	return aliasTempAssignments(script)
+}
+
+func translateInArrays(script string) string {
+	return inArrayPattern.ReplaceAllString(script, `__gs2In($1, [$2])`)
+}
+
+func translateTempParams(script string) string {
+	return tempParamFunctionPattern.ReplaceAllStringFunc(script, func(fn string) string {
+		match := tempParamFunctionPattern.FindStringSubmatch(fn)
+		if len(match) != 3 {
+			return fn
+		}
+		rawParams := strings.Split(match[2], ",")
+		params := make([]string, 0, len(rawParams))
+		assigns := make([]string, 0, len(rawParams))
+		for _, raw := range rawParams {
+			name := strings.TrimSpace(raw)
+			if strings.HasPrefix(name, "temp.") {
+				name = strings.TrimSpace(strings.TrimPrefix(name, "temp."))
+				assigns = append(assigns, "temp."+name+" = "+name+";")
+			}
+			params = append(params, name)
+		}
+		return "function " + match[1] + "(" + strings.Join(params, ", ") + ") { " + strings.Join(assigns, "")
+	})
+}
+
+func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *goja.Object) {
+	schedule := func(call goja.FunctionCall) goja.Value {
+		result.ScheduledEvents = append(result.ScheduledEvents, ScheduledEvent{Delay: valueFloat(call.Argument(0)), Event: valueString(call.Argument(1))})
+		return goja.Undefined()
+	}
+	noOp := func(call goja.FunctionCall) goja.Value { return goja.Undefined() }
+	vm.Set("int", func(call goja.FunctionCall) goja.Value { return vm.ToValue(int(valueFloat(call.Argument(0)))) })
+	vm.Set("random", func(call goja.FunctionCall) goja.Value {
+		min := valueFloat(call.Argument(0))
+		max := valueFloat(call.Argument(1))
+		if max <= min {
+			return vm.ToValue(min)
+		}
+		return vm.ToValue(min + rand.Float64()*(max-min))
+	})
+	vm.Set("char", func(call goja.FunctionCall) goja.Value { return vm.ToValue(string(rune(valueInt(call.Argument(0))))) })
+	vm.Set("strlen", func(call goja.FunctionCall) goja.Value { return vm.ToValue(len(valueString(call.Argument(0)))) })
+	vm.Set("isObject", func(call goja.FunctionCall) goja.Value {
+		arg := call.Argument(0)
+		return vm.ToValue(arg != nil && !goja.IsUndefined(arg) && !goja.IsNull(arg) && arg.ToObject(vm) != nil)
+	})
+	vm.Set("loadclass", noOp)
+	vm.Set("join", noOp)
+	vm.Set("leave", noOp)
+	vm.Set("openurl", noOp)
+	vm.Set("Adventure_setAllowedPortsBind", noOp)
+	vm.Set("sleep", noOp)
+	vm.Set("scheduleevent", schedule)
+	vm.Set("scheduleEvent", schedule)
+	vm.Set("replacetext", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(strings.ReplaceAll(valueString(call.Argument(0)), valueString(call.Argument(1)), valueString(call.Argument(2))))
+	})
+	vm.Set("toJson", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(stringifyJSON(call.Argument(0)))
+	})
+	thisObj.Set("scheduleevent", schedule)
+	thisObj.Set("scheduleEvent", schedule)
+	thisObj.Set("join", noOp)
+	thisObj.Set("leave", noOp)
+}
+
+func stringifyJSON(value goja.Value) string {
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return "null"
+	}
+	data, err := json.Marshal(value.Export())
+	if err != nil {
+		return "null"
+	}
+	return string(data)
+}
+
+func installSocketFunctions(vm *goja.Runtime, result *Result) {
+	vm.Set("__newTSocket", func(call goja.FunctionCall) goja.Value {
+		return newSocketObject(vm, result, valueString(call.Argument(0)), "", nil)
+	})
+}
+
+func newSocketObject(vm *goja.Runtime, result *Result, name, id string, context *SocketContext) *goja.Object {
+	if context != nil {
+		if name == "" {
+			name = context.Name
+		}
+		if id == "" {
+			id = context.ID
+		}
+	}
+	obj := vm.NewObject()
+	obj.Set("__tsocketName", name)
+	obj.Set("__tsocketID", id)
+	obj.Set("name", name)
+	obj.Set("objecttype", "TSocket")
+	obj.Set("address", "")
+	obj.Set("error", "")
+	obj.Set("ipaddress", "")
+	obj.Set("isconnected", false)
+	obj.Set("port", 0)
+	obj.Set("parent", goja.Null())
+	obj.Set("data", "")
+	obj.Set("packagedelimiter", "")
+	obj.Set("enablessl", false)
+	if context != nil {
+		obj.Set("ipaddress", context.IPAddress)
+		obj.Set("isconnected", context.IsConnected)
+		obj.Set("port", context.Port)
+		obj.Set("data", context.Data)
+		obj.Set("packagedelimiter", context.PackageDelimiter)
+	}
+	obj.Set("bind", func(call goja.FunctionCall) goja.Value {
+		result.SocketActions = append(result.SocketActions, SocketAction{Action: "bind", Name: name, ID: id, Port: int(valueInt(call.Argument(0))), PackageDelimiter: valueString(obj.Get("packagedelimiter"))})
+		return goja.Undefined()
+	})
+	obj.Set("close", func(call goja.FunctionCall) goja.Value {
+		result.SocketActions = append(result.SocketActions, SocketAction{Action: "close", Name: name, ID: id})
+		return goja.Undefined()
+	})
+	obj.Set("destroy", func(call goja.FunctionCall) goja.Value {
+		result.SocketActions = append(result.SocketActions, SocketAction{Action: "close", Name: name, ID: id})
+		return goja.Undefined()
+	})
+	obj.Set("send", func(call goja.FunctionCall) goja.Value {
+		result.SocketActions = append(result.SocketActions, SocketAction{Action: "send", Name: name, ID: id, Data: valueString(call.Argument(0))})
+		return goja.Undefined()
+	})
+	obj.Set("join", func(call goja.FunctionCall) goja.Value { return goja.Undefined() })
+	return obj
 }
 
 func translateDynamicCalls(script string) string {
@@ -386,6 +650,16 @@ func installFileFunctions(vm *goja.Runtime, root string) {
 	})
 	if arrayCtor := vm.Get("Array"); arrayCtor != nil {
 		proto := arrayCtor.ToObject(vm).Get("prototype").ToObject(vm)
+		proto.Set("add", func(call goja.FunctionCall) goja.Value {
+			obj := call.This.ToObject(vm)
+			length := int(valueInt(obj.Get("length")))
+			for _, arg := range call.Arguments {
+				obj.Set(strconv.Itoa(length), arg)
+				length++
+			}
+			obj.Set("length", length)
+			return call.This
+		})
 		proto.Set("savelines", func(call goja.FunctionCall) goja.Value {
 			err := saveVMLines(root, valueString(call.Argument(0)), valueLines(call.This), saveMode(call.Argument(1)))
 			return vm.ToValue(err == nil)
@@ -405,6 +679,49 @@ func installFileFunctions(vm *goja.Runtime, root string) {
 	}
 	if stringCtor := vm.Get("String"); stringCtor != nil {
 		proto := stringCtor.ToObject(vm).Get("prototype").ToObject(vm)
+		proto.Set("substring", func(call goja.FunctionCall) goja.Value {
+			text := valueString(call.This)
+			start := int(valueInt(call.Argument(0)))
+			if start < 0 {
+				start = 0
+			}
+			if start > len(text) {
+				start = len(text)
+			}
+			if len(call.Arguments) < 2 || goja.IsUndefined(call.Argument(1)) {
+				return vm.ToValue(text[start:])
+			}
+			length := int(valueInt(call.Argument(1)))
+			if length < 0 {
+				length = 0
+			}
+			end := start + length
+			if end > len(text) {
+				end = len(text)
+			}
+			return vm.ToValue(text[start:end])
+		})
+		proto.Set("tokenize", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.Split(valueString(call.This), valueString(call.Argument(0))))
+		})
+		proto.Set("pos", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.Index(valueString(call.This), valueString(call.Argument(0))))
+		})
+		proto.Set("starts", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.HasPrefix(valueString(call.This), valueString(call.Argument(0))))
+		})
+		proto.Set("ends", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.HasSuffix(valueString(call.This), valueString(call.Argument(0))))
+		})
+		proto.Set("trim", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.TrimSpace(valueString(call.This)))
+		})
+		proto.Set("lower", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.ToLower(valueString(call.This)))
+		})
+		proto.Set("upper", func(call goja.FunctionCall) goja.Value {
+			return vm.ToValue(strings.ToUpper(valueString(call.This)))
+		})
 		proto.Set("savestring", func(call goja.FunctionCall) goja.Value {
 			err := saveVMString(root, valueString(call.Argument(0)), valueString(call.This), saveMode(call.Argument(1)))
 			return vm.ToValue(err == nil)
@@ -417,6 +734,13 @@ func installFileFunctions(vm *goja.Runtime, root string) {
 			return vm.ToValue(text)
 		})
 	}
+	vm.Set("findfiles", func(call goja.FunctionCall) goja.Value {
+		files, err := findVMFiles(root, valueString(call.Argument(0)), call.Argument(1).ToBoolean())
+		if err != nil {
+			return vm.ToValue([]string{})
+		}
+		return vm.ToValue(files)
+	})
 }
 
 func resolveVMFile(root, name string) (string, error) {
@@ -496,6 +820,67 @@ func saveVMLines(root, name string, lines []string, appendMode bool) error {
 	return saveVMString(root, name, text, appendMode)
 }
 
+func findVMFiles(root, pattern string, recursive bool) ([]string, error) {
+	clean := strings.ReplaceAll(valueStringLiteral(pattern), "\\", "/")
+	if recursive && !strings.Contains(clean, "**") {
+		dir := filepath.ToSlash(filepath.Dir(clean))
+		if dir == "." {
+			clean = "**/" + filepath.Base(clean)
+		} else {
+			clean = strings.TrimRight(dir, "/") + "/**/" + filepath.Base(clean)
+		}
+	}
+	base, err := resolveVMFile(root, clean)
+	if err != nil {
+		return nil, err
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	var matches []string
+	if strings.Contains(clean, "**") {
+		prefix, suffix, _ := strings.Cut(clean, "**")
+		start := rootAbs
+		if strings.Trim(prefix, `/\`) != "" {
+			start, err = resolveVMFile(root, strings.TrimSuffix(prefix, "/"))
+			if err != nil {
+				return nil, err
+			}
+		}
+		err = filepath.WalkDir(start, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(rootAbs, path)
+			if err != nil {
+				return nil
+			}
+			ok, _ := filepath.Match(strings.TrimLeft(suffix, `/\`), filepath.Base(rel))
+			if ok {
+				matches = append(matches, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+		return matches, err
+	}
+	raw, err := filepath.Glob(base)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range raw {
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		rel, err := filepath.Rel(rootAbs, path)
+		if err == nil {
+			matches = append(matches, filepath.ToSlash(rel))
+		}
+	}
+	return matches, nil
+}
+
 func saveMode(value goja.Value) bool {
 	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
 		return false
@@ -563,14 +948,21 @@ func aliasTempAssignments(script string) string {
 }
 
 func findFunction(vm *goja.Runtime, eventName string) (goja.Callable, bool) {
-	if fn, ok := goja.AssertFunction(vm.Get(eventName)); ok {
-		return fn, true
+	eventName = strings.ReplaceAll(eventName, ".", "_")
+	names := []string{eventName}
+	if !strings.HasPrefix(strings.ToLower(eventName), "on") && eventName != "" {
+		names = append(names, "on"+strings.ToUpper(eventName[:1])+eventName[1:])
 	}
 	global := vm.GlobalObject()
-	for _, key := range global.Keys() {
-		if strings.EqualFold(key, eventName) {
-			if fn, ok := goja.AssertFunction(global.Get(key)); ok {
-				return fn, true
+	for _, name := range names {
+		if fn, ok := goja.AssertFunction(vm.Get(name)); ok {
+			return fn, true
+		}
+		for _, key := range global.Keys() {
+			if strings.EqualFold(key, name) {
+				if fn, ok := goja.AssertFunction(global.Get(key)); ok {
+					return fn, true
+				}
 			}
 		}
 	}
@@ -720,6 +1112,25 @@ func collectServerFlagObject(result *Result, prefix string, obj *goja.Object, in
 
 func playerMatches(player PlayerContext, target string) bool {
 	return strings.EqualFold(player.Account, target) || strings.EqualFold(player.Nick, target) || strings.EqualFold(player.Nickname, target)
+}
+
+func playerListObject(vm *goja.Runtime, result *Result, players []PlayerContext, tracked *[]scriptPlayerObject) []goja.Value {
+	out := make([]goja.Value, 0, len(players))
+	for _, player := range players {
+		out = append(out, playerObject(vm, result, player, tracked))
+	}
+	return out
+}
+
+func weaponListObject(vm *goja.Runtime, weapons []WeaponContext) []goja.Value {
+	out := make([]goja.Value, 0, len(weapons))
+	for _, weapon := range weapons {
+		obj := vm.NewObject()
+		obj.Set("name", weapon.Name)
+		obj.Set("image", weapon.Image)
+		out = append(out, obj)
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {
