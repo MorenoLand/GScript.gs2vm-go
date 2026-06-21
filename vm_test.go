@@ -39,6 +39,36 @@ func TestRunExposesServerFlagsAndOptions(t *testing.T) {
 	}
 }
 
+func TestRunCollectsMutableServerFlags(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			server.foo = "bar";
+			serverr.secret = "yes";
+			serveroptions.staff = "changed";
+		}`,
+		ServerFlags:   map[string]string{"server.old": "1"},
+		ServerOptions: map[string]string{"staff": "original"},
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.ServerFlags) != 2 {
+		t.Fatalf("Run ServerFlags = %#v", result.ServerFlags)
+	}
+	flags := map[string]string{}
+	for _, flag := range result.ServerFlags {
+		flags[flag.Name] = flag.Value
+	}
+	if flags["server.foo"] != "bar" || flags["serverr.secret"] != "yes" {
+		t.Fatalf("Run ServerFlags = %#v", result.ServerFlags)
+	}
+	if _, ok := flags["serveroptions.staff"]; ok {
+		t.Fatalf("serveroptions write was returned as mutable flag: %#v", result.ServerFlags)
+	}
+}
+
 func TestRunCollectsTriggerClient(t *testing.T) {
 	result := Run(Config{
 		ScriptName: "-gr_movement",

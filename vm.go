@@ -27,6 +27,7 @@ type Result struct {
 	Output         []string
 	ClientTriggers []ClientTrigger
 	PlayerFlags    []PlayerFlag
+	ServerFlags    []ServerFlag
 	PlayerMessages []PlayerMessage
 	PlayerWeapons  []PlayerWeapon
 	PlayerWarps    []PlayerWarp
@@ -52,6 +53,11 @@ type PlayerFlag struct {
 	Account string
 	Name    string
 	Value   string
+}
+
+type ServerFlag struct {
+	Name  string
+	Value string
 }
 
 type PlayerMessage struct {
@@ -107,6 +113,10 @@ func Run(config Config) Result {
 	vm.Set("player", currentPlayerObject)
 	vm.Set("client", currentPlayerObject.Get("client"))
 	vm.Set("clientr", currentPlayerObject.Get("clientr"))
+	serverFlags := flagValues(config.ServerFlags, "server.")
+	serverrFlags := flagValues(config.ServerFlags, "serverr.")
+	serverObj := flagObject(vm, serverFlags)
+	serverrObj := flagObject(vm, serverrFlags)
 	vm.Set("setlevel", func(call goja.FunctionCall) goja.Value {
 		addPlayerWarp(&result, currentPlayer.Account, valueString(call.Argument(0)), 0, 0)
 		return goja.Undefined()
@@ -123,8 +133,8 @@ func Run(config Config) Result {
 		addPlayerWeapon(&result, currentPlayer.Account, valueString(call.Argument(0)), false)
 		return goja.Undefined()
 	})
-	vm.Set("server", objectFromPrefixedMap(vm, config.ServerFlags, "server."))
-	vm.Set("serverr", objectFromPrefixedMap(vm, config.ServerFlags, "serverr."))
+	vm.Set("server", serverObj)
+	vm.Set("serverr", serverrObj)
 	vm.Set("serveroptions", objectFromMap(vm, config.ServerOptions))
 	vm.Set("echo", func(call goja.FunctionCall) goja.Value {
 		parts := make([]string, 0, len(call.Arguments))
@@ -215,6 +225,8 @@ func Run(config Config) Result {
 		result.Err = err.Error()
 	}
 	collectPlayerFlags(vm, &result, players)
+	collectServerFlagObject(&result, "server.", serverObj, serverFlags)
+	collectServerFlagObject(&result, "serverr.", serverrObj, serverrFlags)
 	result.This = exportObject(thisObj)
 	return result
 }
@@ -428,6 +440,18 @@ func collectFlagObject(vm *goja.Runtime, result *Result, account, prefix string,
 		value := valueString(obj.Get(key))
 		if initial[key] != value {
 			result.PlayerFlags = append(result.PlayerFlags, PlayerFlag{Account: account, Name: prefix + key, Value: value})
+		}
+	}
+}
+
+func collectServerFlagObject(result *Result, prefix string, obj *goja.Object, initial map[string]string) {
+	if obj == nil {
+		return
+	}
+	for _, key := range obj.Keys() {
+		value := valueString(obj.Get(key))
+		if initial[key] != value {
+			result.ServerFlags = append(result.ServerFlags, ServerFlag{Name: prefix + key, Value: value})
 		}
 	}
 }
