@@ -278,22 +278,28 @@ func Run(config Config) Result {
 		addPlayerWarp(&result, currentPlayer.Account, valueString(call.Argument(0)), valueFloat(call.Argument(1)), valueFloat(call.Argument(2)))
 		return goja.Undefined()
 	})
-	vm.Set("addweapon", func(call goja.FunctionCall) goja.Value {
+	addWeapon := func(call goja.FunctionCall) goja.Value {
 		addPlayerWeapon(&result, currentPlayer.Account, valueString(call.Argument(0)), true)
 		return goja.Undefined()
-	})
-	vm.Set("removeweapon", func(call goja.FunctionCall) goja.Value {
+	}
+	vm.Set("addweapon", addWeapon)
+	vm.Set("addWeapon", addWeapon)
+	removeWeapon := func(call goja.FunctionCall) goja.Value {
 		addPlayerWeapon(&result, currentPlayer.Account, valueString(call.Argument(0)), false)
 		return goja.Undefined()
-	})
-	vm.Set("sendpm", func(call goja.FunctionCall) goja.Value {
+	}
+	vm.Set("removeweapon", removeWeapon)
+	vm.Set("removeWeapon", removeWeapon)
+	sendPM := func(call goja.FunctionCall) goja.Value {
 		account := valueString(call.Argument(0))
 		message := valueString(call.Argument(1))
 		if account != "" && message != "" {
 			result.PlayerMessages = append(result.PlayerMessages, PlayerMessage{Account: account, Message: message})
 		}
 		return goja.Undefined()
-	})
+	}
+	vm.Set("sendpm", sendPM)
+	vm.Set("sendPM", sendPM)
 	vm.Set("sendplayer", func(call goja.FunctionCall) goja.Value {
 		account := valueString(call.Argument(0))
 		message := valueString(call.Argument(1))
@@ -323,7 +329,7 @@ func Run(config Config) Result {
 	})
 	vm.Set("setshape", func(call goja.FunctionCall) goja.Value {
 		if config.NPCID != 0 {
-			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, ShapeType: int(valueInt(call.Argument(0))), Width: int(valueInt(call.Argument(1))), Height: int(valueInt(call.Argument(2)))})
+			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, ShapeType: 1, Width: int(valueInt(call.Argument(1))), Height: int(valueInt(call.Argument(2)))})
 		}
 		return goja.Undefined()
 	})
@@ -346,6 +352,12 @@ func Run(config Config) Result {
 			if action.MoveOptions&8 != 0 {
 				result.ScheduledEvents = append(result.ScheduledEvents, ScheduledEvent{Delay: action.MoveTime, Event: "onMovementFinished"})
 			}
+		}
+		return goja.Undefined()
+	})
+	vm.Set("showcharacter", func(call goja.FunctionCall) goja.Value {
+		if config.NPCID != 0 {
+			result.NPCActions = append(result.NPCActions, NPCAction{ID: config.NPCID, Props: map[string]string{"image": "#c#", "head": "head0.png", "body": "body.png", "shield": "shield1.png", "sword": "sword1.png", "colors": "2,5,21,5,21", "ani": "idle", "width": "32", "height": "48"}})
 		}
 		return goja.Undefined()
 	})
@@ -476,7 +488,7 @@ func Run(config Config) Result {
 		}
 		return goja.Null()
 	})
-	vm.Set("triggerclient", func(call goja.FunctionCall) goja.Value {
+	triggerClient := func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 2 {
 			return goja.Undefined()
 		}
@@ -486,8 +498,10 @@ func Run(config Config) Result {
 		}
 		result.ClientTriggers = append(result.ClientTriggers, trigger)
 		return goja.Undefined()
-	})
-	vm.Set("findplayer", func(call goja.FunctionCall) goja.Value {
+	}
+	vm.Set("triggerclient", triggerClient)
+	vm.Set("triggerClient", triggerClient)
+	findPlayer := func(call goja.FunctionCall) goja.Value {
 		target := strings.TrimSpace(valueString(call.Argument(0)))
 		for _, candidate := range config.Players {
 			if playerMatches(candidate, target) {
@@ -495,8 +509,10 @@ func Run(config Config) Result {
 			}
 		}
 		return goja.Null()
-	})
-	vm.Set("findnpc", func(call goja.FunctionCall) goja.Value {
+	}
+	vm.Set("findplayer", findPlayer)
+	vm.Set("findPlayer", findPlayer)
+	findNPC := func(call goja.FunctionCall) goja.Value {
 		target := strings.TrimSpace(valueString(call.Argument(0)))
 		for _, npc := range npcs {
 			if strings.EqualFold(npc.name, target) {
@@ -504,8 +520,10 @@ func Run(config Config) Result {
 			}
 		}
 		return goja.Null()
-	})
-	vm.Set("findnpcbyid", func(call goja.FunctionCall) goja.Value {
+	}
+	vm.Set("findnpc", findNPC)
+	vm.Set("findNPC", findNPC)
+	findNPCByID := func(call goja.FunctionCall) goja.Value {
 		target := uint32(valueInt(call.Argument(0)))
 		for _, npc := range npcs {
 			if npc.id == target {
@@ -513,7 +531,9 @@ func Run(config Config) Result {
 			}
 		}
 		return goja.Null()
-	})
+	}
+	vm.Set("findnpcbyid", findNPCByID)
+	vm.Set("findNPCByID", findNPCByID)
 
 	if _, err := vm.RunString(src); err != nil {
 		result.Err = err.Error()
@@ -521,6 +541,12 @@ func Run(config Config) Result {
 	}
 	fn, ok := findFunction(vm, config.EventName)
 	if !ok {
+		collectPlayerFlags(vm, &result, players)
+		collectNPCFlags(&result, npcs)
+		collectServerFlagObject(&result, "server.", serverObj, serverFlags)
+		collectServerFlagObject(&result, "serverr.", serverrObj, serverrFlags)
+		collectCurrentNPCAction(vm, &result, thisObj, config.NPCID)
+		result.This = exportObject(thisObj)
 		return result
 	}
 	args := make([]goja.Value, 0, len(config.Params)+1)
@@ -570,7 +596,19 @@ func installCurrentNPCFunctions(vm *goja.Runtime, thisObj *goja.Object) {
 		"cannotbepulled":  func(call goja.FunctionCall) goja.Value { setBoolFlag("canbepulled", false); return goja.Undefined() },
 		"canbepushed":     func(call goja.FunctionCall) goja.Value { setBoolFlag("canbepushed", true); return goja.Undefined() },
 		"cannotbepushed":  func(call goja.FunctionCall) goja.Value { setBoolFlag("canbepushed", false); return goja.Undefined() },
-		"canwarp":         func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp", true); return goja.Undefined() },
+		"showcharacter": func(call goja.FunctionCall) goja.Value {
+			thisObj.Set("image", "#c#")
+			thisObj.Set("headimg", "head0.png")
+			thisObj.Set("bodyimg", "body.png")
+			thisObj.Set("shieldimg", "shield1.png")
+			thisObj.Set("swordimg", "sword1.png")
+			thisObj.Set("ani", "idle")
+			thisObj.Set("colors", []string{"2", "5", "21", "5", "21"})
+			thisObj.Set("width", 32)
+			thisObj.Set("height", 48)
+			return goja.Undefined()
+		},
+		"canwarp": func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp", true); return goja.Undefined() },
 		"canwarp2":        func(call goja.FunctionCall) goja.Value { setBoolFlag("canwarp2", true); return goja.Undefined() },
 		"cannotwarp": func(call goja.FunctionCall) goja.Value {
 			setBoolFlag("canwarp", false)
@@ -589,9 +627,10 @@ func collectCurrentNPCAction(vm *goja.Runtime, result *Result, thisObj *goja.Obj
 		return
 	}
 	propAliases := map[string]string{
-		"image": "image", "chat": "chat", "message": "chat", "dir": "dir", "ani": "ani", "gani": "ani",
-		"head": "head", "headimg": "head", "body": "body", "bodyimg": "body", "sword": "sword", "shield": "shield", "horseimg": "horse",
-		"hearts": "hearts", "gralats": "gralats", "arrows": "arrows", "bombs": "bombs", "darts": "arrows", "glovepower": "glovepower", "ap": "ap",
+		"image": "image", "chat": "chat", "message": "chat", "nick": "nick", "nickname": "nick", "dir": "dir", "ani": "ani", "gani": "ani",
+		"head": "head", "headimg": "head", "body": "body", "bodyimg": "body", "sword": "sword", "swordimg": "sword", "shield": "shield", "shieldimg": "shield", "horseimg": "horse",
+		"hearts": "hearts", "gralats": "gralats", "arrows": "arrows", "bombs": "bombs", "darts": "arrows", "glovepower": "glovepower", "swordpower": "swordpower", "shieldpower": "shieldpower", "ap": "ap",
+		"colors": "colors", "width": "width", "height": "height",
 	}
 	action := NPCAction{ID: npcID}
 	for name, canonical := range propAliases {
@@ -2226,6 +2265,13 @@ func valueString(value goja.Value) string {
 			parts = append(parts, fmt.Sprint(part))
 		}
 		return strings.Join(parts, ",")
+	case map[string]any:
+		if name, ok := typed["name"]; ok {
+			if text := fmt.Sprint(name); text != "" && text != "<nil>" {
+				return text
+			}
+		}
+		return value.String()
 	default:
 		return value.String()
 	}

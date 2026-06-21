@@ -44,6 +44,40 @@ func TestRunSupportsOneLineFunctionBodies(t *testing.T) {
 	}
 }
 
+func TestRunCollectsTopLevelNPCPropsWithoutEventFunction(t *testing.T) {
+	result := Run(Config{
+		ScriptName: "Control-NPC",
+		EventName:  "onCreated",
+		NPCID:      7,
+		Script:     `chat = 1;`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCActions) != 1 || result.NPCActions[0].Props["chat"] != "1" {
+		t.Fatalf("NPC actions = %#v", result.NPCActions)
+	}
+}
+
+func TestRunShowCharacterAppliesDefaultCharacterProps(t *testing.T) {
+	result := Run(Config{
+		ScriptName: "Control-NPC",
+		EventName:  "onCreated",
+		NPCID:      7,
+		Script: `function onCreated() {
+			showcharacter();
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCActions) == 0 || result.NPCActions[0].Props["image"] != "#c#" || result.NPCActions[0].Props["ani"] != "idle" {
+		t.Fatalf("NPC actions = %#v", result.NPCActions)
+	}
+}
+
 func TestRunPlayerLifecycleEventPassesPlayerObjectArgument(t *testing.T) {
 	result := Run(Config{
 		EventName: "onPlayerLogin",
@@ -1205,6 +1239,50 @@ func TestRunPersistsThisButNotTempThroughHostState(t *testing.T) {
 	}
 	if len(second.Output) != 1 || second.Output[0] != "ok" {
 		t.Fatalf("second output = %#v this=%#v", second.Output, second.This)
+	}
+}
+
+func TestRunCollectsGlobalNPCChatFromEvent(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		NPCID:     7,
+		Script:    `function onCreated() chat = 1;`,
+	})
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCActions) != 1 || result.NPCActions[0].Chat != "1" {
+		t.Fatalf("NPCActions = %#v", result.NPCActions)
+	}
+}
+
+func TestRunSupportsCaseInsensitiveHostFunctionAliases(t *testing.T) {
+	result := Run(Config{
+		ScriptName: "-gr_movement",
+		EventName:  "onCreated",
+		Player:     map[string]string{"account": "moondeath"},
+		Players:    []PlayerContext{{Account: "moondeath", Nick: "moondeath"}},
+		Script:     `function onCreated() findPlayer("moondeath").addWeapon(this);`,
+	})
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.PlayerWeapons) != 1 || result.PlayerWeapons[0].Account != "moondeath" || result.PlayerWeapons[0].Name != "-gr_movement" {
+		t.Fatalf("PlayerWeapons = %#v", result.PlayerWeapons)
+	}
+}
+
+func TestRunSetShapeAppliesShapeSize(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		NPCID:     7,
+		Script:    `function onCreated() setshape(1, 32, 32);`,
+	})
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.NPCActions) != 1 || result.NPCActions[0].ShapeType != 1 || result.NPCActions[0].Width != 32 || result.NPCActions[0].Height != 32 {
+		t.Fatalf("NPCActions = %#v", result.NPCActions)
 	}
 }
 
