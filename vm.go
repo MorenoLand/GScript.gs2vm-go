@@ -27,6 +27,7 @@ type Config struct {
 	PlayerFlags   map[string]string
 	Players       []PlayerContext
 	Weapons       []WeaponContext
+	Servers       []ServerContext
 	NPCs          []NPCContext
 	NPCID         uint32
 	This          map[string]any
@@ -80,6 +81,18 @@ type PlayerContext struct {
 type WeaponContext struct {
 	Name  string
 	Image string
+}
+
+type ServerContext struct {
+	Name         string
+	Type         string
+	PlayerCount  int
+	Language     string
+	Description  string
+	URL          string
+	Version      string
+	GameVersions string
+	Latency      int
 }
 
 type NPCContext struct {
@@ -245,6 +258,7 @@ func Run(config Config) Result {
 	vm.Set("allplayers", allPlayers)
 	vm.Set("players", allPlayers)
 	vm.Set("weapons", weaponListObject(vm, config.Weapons))
+	vm.Set("servers", serverListObject(vm, config.Servers))
 	vm.Set("temp", vm.NewObject())
 	vm.Set("maxlooplimit", 10000)
 	vm.Set("TAB", "\t")
@@ -2212,6 +2226,26 @@ func weaponListObject(vm *goja.Runtime, weapons []WeaponContext) []goja.Value {
 		obj := vm.NewObject()
 		obj.Set("name", weapon.Name)
 		obj.Set("image", weapon.Image)
+		out = append(out, obj)
+	}
+	return out
+}
+
+func serverListObject(vm *goja.Runtime, servers []ServerContext) []goja.Value {
+	out := make([]goja.Value, 0, len(servers))
+	for _, server := range servers {
+		obj := vm.NewObject()
+		obj.Set("name", server.Name)
+		obj.Set("type", server.Type)
+		obj.Set("players", server.PlayerCount)
+		obj.Set("playercount", server.PlayerCount)
+		obj.Set("language", server.Language)
+		obj.Set("description", server.Description)
+		obj.Set("url", server.URL)
+		obj.Set("website", server.URL)
+		obj.Set("version", server.Version)
+		obj.Set("gameversions", server.GameVersions)
+		obj.Set("latency", server.Latency)
 		out = append(out, obj)
 	}
 	return out

@@ -626,7 +626,7 @@ func TestRunSupportsTabAndNLConcatenators(t *testing.T) {
 	}
 }
 
-func TestRunExposesPlayersWeaponsAndNPCWarp(t *testing.T) {
+func TestRunExposesPlayersWeaponsServersAndNPCWarp(t *testing.T) {
 	result := Run(Config{
 		NPCID:     25,
 		EventName: "onCreated",
@@ -635,8 +635,9 @@ func TestRunExposesPlayersWeaponsAndNPCWarp(t *testing.T) {
 			{Account: "guest", Nick: "guest"},
 		},
 		Weapons: []WeaponContext{{Name: "-gr_movement", Image: "wbomb1.png"}},
+		Servers: []ServerContext{{Name: "Orion-Go", Type: "Gold", PlayerCount: 3, Language: "English", Description: "Go Code GServer", URL: "https://example.test", Version: "Custom version", GameVersions: "2.220,6.037", Latency: 42}},
 		Script: `function onCreated() {
-			echo(allplayers.length SPC allplayers[0].account SPC weapons[0].name);
+			echo(allplayers.length SPC allplayers[0].account SPC weapons[0].name SPC servers[0].name SPC servers[0].players SPC servers[0].latency);
 			warpto("test.nw", 30, 31);
 		}`,
 	})
@@ -644,7 +645,7 @@ func TestRunExposesPlayersWeaponsAndNPCWarp(t *testing.T) {
 	if result.Err != "" {
 		t.Fatalf("Run err = %q", result.Err)
 	}
-	if len(result.Output) != 1 || result.Output[0] != "2 moondeath -gr_movement" {
+	if len(result.Output) != 1 || result.Output[0] != "2 moondeath -gr_movement Orion-Go 3 42" {
 		t.Fatalf("Run output = %#v", result.Output)
 	}
 	if len(result.NPCActions) != 1 || result.NPCActions[0].WarpLevel != "test.nw" || result.NPCActions[0].WarpX != 30 || result.NPCActions[0].WarpY != 31 {
