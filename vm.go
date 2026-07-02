@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -998,9 +999,25 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 	vm.Set("abs", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Abs(valueFloat(call.Argument(0)))) })
 	vm.Set("ceil", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Ceil(valueFloat(call.Argument(0)))) })
 	vm.Set("floor", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Floor(valueFloat(call.Argument(0)))) })
+	vm.Set("round", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Round(valueFloat(call.Argument(0)))) })
 	vm.Set("sin", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Sin(valueFloat(call.Argument(0)))) })
 	vm.Set("cos", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Cos(valueFloat(call.Argument(0)))) })
 	vm.Set("tan", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Tan(valueFloat(call.Argument(0)))) })
+	vm.Set("atan", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Atan(valueFloat(call.Argument(0)))) })
+	vm.Set("atan2", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(math.Atan2(valueFloat(call.Argument(0)), valueFloat(call.Argument(1))))
+	})
+	vm.Set("log", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Log(valueFloat(call.Argument(0)))) })
+	vm.Set("sqrt", func(call goja.FunctionCall) goja.Value { return vm.ToValue(math.Sqrt(valueFloat(call.Argument(0)))) })
+	vm.Set("pow", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(math.Pow(valueFloat(call.Argument(0)), valueFloat(call.Argument(1))))
+	})
+	vm.Set("max", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(math.Max(valueFloat(call.Argument(0)), valueFloat(call.Argument(1))))
+	})
+	vm.Set("min", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(math.Min(valueFloat(call.Argument(0)), valueFloat(call.Argument(1))))
+	})
 	vm.Set("strequals", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(valueString(call.Argument(0)) == valueString(call.Argument(1)))
 	})
@@ -1031,13 +1048,79 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 		return vm.ToValue(min + rand.Float64()*(max-min))
 	})
 	vm.Set("char", func(call goja.FunctionCall) goja.Value { return vm.ToValue(string(rune(valueInt(call.Argument(0))))) })
+	vm.Set("getascii", func(call goja.FunctionCall) goja.Value {
+		text := valueString(call.Argument(0))
+		if text == "" {
+			return vm.ToValue(0)
+		}
+		return vm.ToValue(int([]byte(text)[0]))
+	})
 	vm.Set("strlen", func(call goja.FunctionCall) goja.Value { return vm.ToValue(len(valueString(call.Argument(0)))) })
 	vm.Set("format", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(formatStringCall(call))
 	})
+	vm.Set("format2", func(call goja.FunctionCall) goja.Value {
+		format := valueString(call.Argument(0))
+		values := arrayValues(call.Argument(1))
+		index := 0
+		return vm.ToValue(regexp.MustCompile(`%s`).ReplaceAllStringFunc(format, func(string) string {
+			if index >= len(values) {
+				return ""
+			}
+			value := fmt.Sprint(values[index])
+			index++
+			return value
+		}))
+	})
 	vm.Set("getextension", func(call goja.FunctionCall) goja.Value {
 		ext := strings.TrimPrefix(path.Ext(valueString(call.Argument(0))), ".")
 		return vm.ToValue(ext)
+	})
+	vm.Set("urlencode", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(url.QueryEscape(valueString(call.Argument(0))))
+	})
+	vm.Set("urldecode", func(call goja.FunctionCall) goja.Value {
+		text, err := url.QueryUnescape(valueString(call.Argument(0)))
+		if err != nil {
+			text = ""
+		}
+		return vm.ToValue(text)
+	})
+	vm.Set("regex_match", func(call goja.FunctionCall) goja.Value {
+		match, err := regexp.MatchString("^(?:"+valueString(call.Argument(1))+")$", valueString(call.Argument(0)))
+		return vm.ToValue(err == nil && match)
+	})
+	vm.Set("regex_test", func(call goja.FunctionCall) goja.Value {
+		match, err := regexp.MatchString(valueString(call.Argument(1)), valueString(call.Argument(0)))
+		return vm.ToValue(err == nil && match)
+	})
+	vm.Set("regex_find", func(call goja.FunctionCall) goja.Value {
+		re, err := regexp.Compile(valueString(call.Argument(1)))
+		if err != nil {
+			return vm.ToValue("")
+		}
+		return vm.ToValue(re.FindString(valueString(call.Argument(0))))
+	})
+	vm.Set("regex_findall", func(call goja.FunctionCall) goja.Value {
+		re, err := regexp.Compile(valueString(call.Argument(1)))
+		if err != nil {
+			return vm.ToValue([]string{})
+		}
+		return vm.ToValue(re.FindAllString(valueString(call.Argument(0)), -1))
+	})
+	vm.Set("regex_replace", func(call goja.FunctionCall) goja.Value {
+		re, err := regexp.Compile(valueString(call.Argument(1)))
+		if err != nil {
+			return call.Argument(0)
+		}
+		return vm.ToValue(re.ReplaceAllString(valueString(call.Argument(0)), valueString(call.Argument(2))))
+	})
+	vm.Set("regex_split", func(call goja.FunctionCall) goja.Value {
+		re, err := regexp.Compile(valueString(call.Argument(1)))
+		if err != nil {
+			return vm.ToValue([]string{})
+		}
+		return vm.ToValue(re.Split(valueString(call.Argument(0)), -1))
 	})
 	vm.Set("hideimgs", func(call goja.FunctionCall) goja.Value { return vm.ToValue(0) })
 	vm.Set("keycode", func(call goja.FunctionCall) goja.Value { return vm.ToValue(valueInt(call.Argument(0))) })

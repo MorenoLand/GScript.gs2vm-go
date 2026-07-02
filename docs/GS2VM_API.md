@@ -40,11 +40,20 @@
 - `abs(value)`
 - `ceil(value)`
 - `floor(value)`
+- `round(value)`
 - `sin(value)`
 - `cos(value)`
 - `tan(value)`
+- `atan(value)`
+- `atan2(y, x)`
+- `log(value)`
+- `sqrt(value)`
+- `pow(value, exponent)`
+- `max(left, right)`
+- `min(left, right)`
 - `random(min, max)`
 - `char(code)`
+- `getascii(value)`
 - `strlen(value)`
 - `hideimgs(start, count)`
 - `keycode(code)`
@@ -58,6 +67,15 @@
 - `lowercase(value)`
 - `replacetext(value, search, replacement)`
 - `toJson(value)`
+- `format2(format, values)`
+- `urlencode(value)`
+- `urldecode(value)`
+- `regex_match(value, pattern)`
+- `regex_test(value, pattern)`
+- `regex_find(value, pattern)`
+- `regex_findall(value, pattern)`
+- `regex_replace(value, pattern, replacement)`
+- `regex_split(value, pattern)`
 - `base64encode(value)`
 - `base64decode(value)`
 - `openurl(value)`
