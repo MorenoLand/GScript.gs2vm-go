@@ -21,6 +21,7 @@
 - `screenheight`
 - `timevar`
 - `timevar2`
+- `this.hp`
 
 ## Time Globals
 
@@ -61,6 +62,8 @@
 - `base64decode(value)`
 - `openurl(value)`
 - `sleep(value)`
+- `settimer(delay)`
+- `setTimer(delay)`
 - `sendtorc(message)`
 - `sendtonc(message)`
 
@@ -68,7 +71,7 @@
 
 - `loadclass(name)` is accepted as a no-op runtime call.
 - `join(name)` and `leave(name)` are accepted as no-op runtime calls after server-side class expansion has already happened; `this.join(name)` and `this.leave(name)` are accepted aliases.
-- `scheduleevent(delay, event)` queues a delayed event; `scheduleEvent(...)` and `this.scheduleEvent(...)` are accepted aliases.
+- `scheduleevent(delay, event)` queues a delayed event; `scheduleEvent(...)`, `settimer(...)`, `setTimer(...)`, and `this.*` variants are accepted aliases.
 
 ## Player Functions
 

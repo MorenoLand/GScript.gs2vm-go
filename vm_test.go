@@ -60,6 +60,27 @@ func TestRunExposesTimevars(t *testing.T) {
 	}
 }
 
+func TestRunSupportsCadScriptObjectParity(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			echo(this.hp);
+			settimer(2);
+			this.setTimer(3);
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "" {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	if len(result.ScheduledEvents) != 2 || result.ScheduledEvents[0].Delay != 2 || result.ScheduledEvents[1].Delay != 3 {
+		t.Fatalf("ScheduledEvents = %#v", result.ScheduledEvents)
+	}
+}
+
 func TestRunSupportsOneLineFunctionBodies(t *testing.T) {
 	result := Run(Config{
 		EventName: "onCreated",

@@ -295,6 +295,9 @@ func Run(config Config) Result {
 		vm.Set("params", vm.NewArray(currentPlayerObject))
 	}
 	vm.Set("chat", "")
+	if goja.IsUndefined(thisObj.Get("hp")) {
+		thisObj.Set("hp", 0)
+	}
 	serverFlags := flagValues(config.ServerFlags, "server.")
 	serverrFlags := flagValues(config.ServerFlags, "serverr.")
 	serverObj := flagObject(vm, serverFlags)
@@ -1059,6 +1062,8 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 	vm.Set("openurl", noOp)
 	vm.Set("Adventure_setAllowedPortsBind", noOp)
 	vm.Set("sleep", noOp)
+	vm.Set("settimer", schedule)
+	vm.Set("setTimer", schedule)
 	vm.Set("scheduleevent", schedule)
 	vm.Set("scheduleEvent", schedule)
 	vm.Set("replacetext", func(call goja.FunctionCall) goja.Value {
@@ -1069,6 +1074,8 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 	})
 	thisObj.Set("scheduleevent", schedule)
 	thisObj.Set("scheduleEvent", schedule)
+	thisObj.Set("settimer", schedule)
+	thisObj.Set("setTimer", schedule)
 	thisObj.Set("join", noOp)
 	thisObj.Set("leave", noOp)
 }
