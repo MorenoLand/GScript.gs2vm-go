@@ -3,8 +3,10 @@ package gs2vm
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunEchoesParamsAndPlayerAccount(t *testing.T) {
@@ -23,6 +25,38 @@ func TestRunEchoesParamsAndPlayerAccount(t *testing.T) {
 	}
 	if len(result.Output) != 1 || result.Output[0] != "test from clientside moondeath" {
 		t.Fatalf("Run output = %#v", result.Output)
+	}
+}
+
+func TestRunExposesTimevars(t *testing.T) {
+	before := time.Now().Unix()
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			echo(int(timevar));
+			echo(int(timevar2));
+			echo(int(timevar2 - (timevar * 5 + 981048814)));
+		}`,
+	})
+	after := time.Now().Unix()
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 3 {
+		t.Fatalf("Run output = %#v", result.Output)
+	}
+	timevar, err := strconv.Atoi(result.Output[0])
+	if err != nil || timevar <= 0 {
+		t.Fatalf("timevar output = %#v err=%v", result.Output[0], err)
+	}
+	timevar2, err := strconv.ParseInt(result.Output[1], 10, 64)
+	if err != nil || timevar2 < before || timevar2 > after+1 {
+		t.Fatalf("timevar2 output = %#v err=%v before=%d after=%d", result.Output[1], err, before, after)
+	}
+	remainder, err := strconv.Atoi(result.Output[2])
+	if err != nil || remainder < 0 || remainder > 4 {
+		t.Fatalf("timevar remainder = %#v err=%v", result.Output[2], err)
 	}
 }
 
@@ -635,9 +669,14 @@ func TestRunExposesPlayersWeaponsServersAndNPCWarp(t *testing.T) {
 			{Account: "guest", Nick: "guest"},
 		},
 		Weapons: []WeaponContext{{Name: "-gr_movement", Image: "wbomb1.png"}},
-		Servers: []ServerContext{{Name: "Orion-Go", Type: "Gold", PlayerCount: 3, Language: "English", Description: "Go Code GServer", URL: "https://example.test", Version: "Custom version", GameVersions: "2.220,6.037", Latency: 42}},
+		Servers: []ServerContext{
+			{Name: "Orion-Go", Type: "Gold", PlayerCount: 3, Language: "English", Description: "Go Code GServer", URL: "https://example.test", Version: "Custom version", GameVersions: "2.220,6.037", Latency: 42},
+			{Name: `"""Bomber Arena (v6)"""`, Type: "Gold", PlayerCount: 1},
+		},
 		Script: `function onCreated() {
 			echo(allplayers.length SPC allplayers[0].account SPC weapons[0].name SPC servers[0].name SPC servers[0].players SPC servers[0].latency);
+			echo(servers[1]);
+			echo(servers);
 			warpto("test.nw", 30, 31);
 		}`,
 	})
@@ -645,7 +684,7 @@ func TestRunExposesPlayersWeaponsServersAndNPCWarp(t *testing.T) {
 	if result.Err != "" {
 		t.Fatalf("Run err = %q", result.Err)
 	}
-	if len(result.Output) != 1 || result.Output[0] != "2 moondeath -gr_movement Orion-Go 3 42" {
+	if len(result.Output) != 3 || result.Output[0] != "2 moondeath -gr_movement Orion-Go 3 42" || result.Output[1] != "Bomber Arena (v6)" || result.Output[2] != "Orion-Go,Bomber Arena (v6)" {
 		t.Fatalf("Run output = %#v", result.Output)
 	}
 	if len(result.NPCActions) != 1 || result.NPCActions[0].WarpLevel != "test.nw" || result.NPCActions[0].WarpX != 30 || result.NPCActions[0].WarpY != 31 {
@@ -756,6 +795,30 @@ func TestRunFindPlayerSendPMAndFlags(t *testing.T) {
 	}
 	if len(result.PlayerMessages) != 4 || result.PlayerMessages[0].Account != "moondeath" || result.PlayerMessages[0].Message != "hey there" || result.PlayerMessages[1].Message != "second" || result.PlayerMessages[2].Message != "third" || result.PlayerMessages[3].Message != "fourth" {
 		t.Fatalf("PlayerMessages = %#v", result.PlayerMessages)
+	}
+}
+
+func TestRunFindPlayerMissingIsNoOpPlayer(t *testing.T) {
+	result := Run(Config{
+		EventName: "onCreated",
+		Script: `function onCreated() {
+			temp.pl = findplayer("offline");
+			temp.pl.addweapon("-missing");
+			pl.sendpm("nope");
+			findplayer("offline").setlevel2("bad.nw", 1, 2);
+			if (findplayer("offline").hasrightflag("warptoxy")) echo("bad");
+			echo("still running");
+		}`,
+	})
+
+	if result.Err != "" {
+		t.Fatalf("Run err = %q", result.Err)
+	}
+	if len(result.Output) != 1 || result.Output[0] != "still running" {
+		t.Fatalf("Output = %#v", result.Output)
+	}
+	if len(result.PlayerWeapons) != 0 || len(result.PlayerMessages) != 0 || len(result.PlayerWarps) != 0 {
+		t.Fatalf("missing player emitted actions: weapons=%#v messages=%#v warps=%#v", result.PlayerWeapons, result.PlayerMessages, result.PlayerWarps)
 	}
 }
 

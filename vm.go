@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dop251/goja"
 )
@@ -239,6 +240,17 @@ var dottedFunctionPattern = regexp.MustCompile(`\bfunction\s+([A-Za-z_][A-Za-z0-
 var tempParamFunctionPattern = regexp.MustCompile(`\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*temp\.[^)]*)\)\s*\{`)
 var newTSocketPattern = regexp.MustCompile(`\bnew\s+TSocket\s*\(`)
 
+const graalTimevarEpochUnix = 981048814
+
+func currentTimevars() (int64, float64) {
+	now := float64(time.Now().UnixNano()) / float64(time.Second)
+	timevar := int64((now - graalTimevarEpochUnix) / 5)
+	if timevar < 0 {
+		timevar = 0
+	}
+	return timevar, now
+}
+
 func Run(config Config) Result {
 	vm := goja.New()
 	result := Result{}
@@ -261,6 +273,9 @@ func Run(config Config) Result {
 	vm.Set("servers", serverListObject(vm, config.Servers))
 	vm.Set("temp", vm.NewObject())
 	vm.Set("maxlooplimit", 10000)
+	timevar, timevar2 := currentTimevars()
+	vm.Set("timevar", timevar)
+	vm.Set("timevar2", timevar2)
 	vm.Set("TAB", "\t")
 	vm.Set("NL", "\n")
 	vm.Set("NULL", goja.Null())
@@ -530,7 +545,7 @@ func Run(config Config) Result {
 				return playerObject(vm, &result, candidate, &players)
 			}
 		}
-		return goja.Null()
+		return missingPlayerObject(vm)
 	}
 	vm.Set("findplayer", findPlayer)
 	vm.Set("findPlayer", findPlayer)
@@ -2069,6 +2084,33 @@ func playerObject(vm *goja.Runtime, result *Result, player PlayerContext, player
 	return obj
 }
 
+func missingPlayerObject(vm *goja.Runtime) *goja.Object {
+	obj := vm.NewObject()
+	noOp := func(call goja.FunctionCall) goja.Value { return goja.Undefined() }
+	obj.Set("id", 0)
+	obj.Set("account", "")
+	obj.Set("nick", "")
+	obj.Set("nickname", "")
+	obj.Set("level", "")
+	obj.Set("dir", 0)
+	obj.Set("client", vm.NewObject())
+	obj.Set("clientr", vm.NewObject())
+	obj.Set("sendpm", noOp)
+	obj.Set("sendplayer", noOp)
+	obj.Set("sendtorc", noOp)
+	obj.Set("setlevel", noOp)
+	obj.Set("setlevel2", noOp)
+	obj.Set("addweapon", noOp)
+	obj.Set("addWeapon", noOp)
+	obj.Set("removeweapon", noOp)
+	obj.Set("removeWeapon", noOp)
+	obj.Set("join", noOp)
+	obj.Set("hasrightflag", func(call goja.FunctionCall) goja.Value { return vm.ToValue(false) })
+	obj.Set("hasright", func(call goja.FunctionCall) goja.Value { return vm.ToValue(false) })
+	obj.Set("toString", func(call goja.FunctionCall) goja.Value { return vm.ToValue("") })
+	return obj
+}
+
 func playerHasRightFlag(player PlayerContext, name string) bool {
 	name = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(name, "-", "")))
 	for _, right := range player.Rights {
@@ -2234,8 +2276,9 @@ func weaponListObject(vm *goja.Runtime, weapons []WeaponContext) []goja.Value {
 func serverListObject(vm *goja.Runtime, servers []ServerContext) []goja.Value {
 	out := make([]goja.Value, 0, len(servers))
 	for _, server := range servers {
+		name := cleanServerListName(server.Name)
 		obj := vm.NewObject()
-		obj.Set("name", server.Name)
+		obj.Set("name", name)
 		obj.Set("type", server.Type)
 		obj.Set("players", server.PlayerCount)
 		obj.Set("playercount", server.PlayerCount)
@@ -2246,9 +2289,18 @@ func serverListObject(vm *goja.Runtime, servers []ServerContext) []goja.Value {
 		obj.Set("version", server.Version)
 		obj.Set("gameversions", server.GameVersions)
 		obj.Set("latency", server.Latency)
+		obj.Set("toString", func(call goja.FunctionCall) goja.Value { return vm.ToValue(name) })
 		out = append(out, obj)
 	}
 	return out
+}
+
+func cleanServerListName(name string) string {
+	name = strings.TrimSpace(name)
+	for len(name) >= 2 && name[0] == '"' && name[len(name)-1] == '"' {
+		name = strings.TrimSpace(name[1 : len(name)-1])
+	}
+	return name
 }
 
 func firstNonEmpty(values ...string) string {
@@ -2304,19 +2356,49 @@ func valueString(value goja.Value) string {
 	case []any:
 		parts := make([]string, 0, len(typed))
 		for _, part := range typed {
-			parts = append(parts, fmt.Sprint(part))
+			parts = append(parts, valueStringExport(part))
 		}
 		return strings.Join(parts, ",")
 	case map[string]any:
-		if name, ok := typed["name"]; ok {
-			if text := fmt.Sprint(name); text != "" && text != "<nil>" {
-				return text
-			}
+		if text := namedObjectString(typed); text != "" {
+			return text
 		}
 		return value.String()
 	default:
 		return value.String()
 	}
+}
+
+func valueStringExport(value any) string {
+	switch typed := value.(type) {
+	case goja.Value:
+		return valueString(typed)
+	case *goja.Object:
+		if text := valueString(typed.Get("name")); text != "" {
+			return text
+		}
+		return typed.String()
+	case map[string]any:
+		if text := namedObjectString(typed); text != "" {
+			return text
+		}
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, part := range typed {
+			parts = append(parts, valueStringExport(part))
+		}
+		return strings.Join(parts, ",")
+	}
+	return fmt.Sprint(value)
+}
+
+func namedObjectString(value map[string]any) string {
+	if name, ok := value["name"]; ok {
+		if text := fmt.Sprint(name); text != "" && text != "<nil>" {
+			return text
+		}
+	}
+	return ""
 }
 
 func formatStringCall(call goja.FunctionCall) string {

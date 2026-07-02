@@ -19,6 +19,13 @@
 - `servers`
 - `screenwidth`
 - `screenheight`
+- `timevar`
+- `timevar2`
+
+## Time Globals
+
+- `timevar` is the integer Graal2001 5-second server clock derived from Unix time.
+- `timevar2` is the current Unix timestamp in seconds as a float.
 
 ## Core Functions
 
@@ -80,6 +87,7 @@ Bare `sendpm` and `sendplayer` route to the supplied account.
 ## Player Objects
 
 Player objects are returned by `findplayer()` and appear in `player` and `allplayers`.
+Missing `findplayer()` targets return a no-op player object, so chained player calls fail silently and emit no host actions.
 
 Supported fields:
 
