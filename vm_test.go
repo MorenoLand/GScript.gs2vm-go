@@ -89,6 +89,8 @@ func TestRunSupportsExtendedUtilityParity(t *testing.T) {
 			echo(atan2(1, 1) > 0);
 			echo(getascii("A") SPC urlencode("a b") SPC urldecode("a+b"));
 			echo(format2("%s:%s", {"a", "b"}));
+			echo(format2("%s", {1783004608.354868888}));
+			echo(1783004608.354868888);
 			echo(regex_match("abc", "a.c") SPC regex_test("abc", "b") SPC regex_find("abc123", "[0-9]+"));
 			echo(regex_findall("a1b2", "[0-9]").size() SPC regex_replace("abc", "b", "X") SPC regex_split("a,b", ",").size());
 		}`,
@@ -97,7 +99,7 @@ func TestRunSupportsExtendedUtilityParity(t *testing.T) {
 	if result.Err != "" {
 		t.Fatalf("Run err = %q", result.Err)
 	}
-	expected := []string{"2 3 8 5 2", "true", "65 a+b a b", "a:b", "true true 123", "2 aXc 2"}
+	expected := []string{"2 3 8 5 2", "true", "65 a+b a b", "a:b", "1783004608.354869", "1783004608.354869", "true true 123", "2 aXc 2"}
 	if strings.Join(result.Output, "\n") != strings.Join(expected, "\n") {
 		t.Fatalf("Run output = %#v", result.Output)
 	}

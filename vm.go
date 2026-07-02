@@ -1062,12 +1062,18 @@ func installScriptUtilityFunctions(vm *goja.Runtime, result *Result, thisObj *go
 	vm.Set("format2", func(call goja.FunctionCall) goja.Value {
 		format := valueString(call.Argument(0))
 		values := arrayValues(call.Argument(1))
+		if len(values) == 0 && len(call.Arguments) > 2 {
+			values = make([]any, 0, len(call.Arguments)-1)
+			for _, arg := range call.Arguments[1:] {
+				values = append(values, arg.Export())
+			}
+		}
 		index := 0
 		return vm.ToValue(regexp.MustCompile(`%s`).ReplaceAllStringFunc(format, func(string) string {
 			if index >= len(values) {
 				return ""
 			}
-			value := fmt.Sprint(values[index])
+			value := valueStringExport(values[index])
 			index++
 			return value
 		}))
@@ -2441,6 +2447,10 @@ func valueString(value goja.Value) string {
 	}
 	exported := value.Export()
 	switch typed := exported.(type) {
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
 	case []string:
 		return strings.Join(typed, ",")
 	case []any:
@@ -2478,6 +2488,10 @@ func valueStringExport(value any) string {
 			parts = append(parts, valueStringExport(part))
 		}
 		return strings.Join(parts, ",")
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
 	}
 	return fmt.Sprint(value)
 }
